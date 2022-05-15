@@ -210,7 +210,7 @@ class Estimation:
     
     ######### visualization of the results ###################
     
-    def plot_fitted(self, arr, N0, a, alpha, col='blue', frac=1, bins=500):
+    def plot_fitted(self, arr, N0, a, alpha, col='blue', frac=1, bins=500, outname=""):
         sorted_arr = np.array(sorted(arr))
         l_lim = sorted_arr[0]
         u_lim = sorted_arr[-1]
