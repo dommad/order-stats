@@ -1,26 +1,19 @@
 import pandas as pd
-import seaborn as sns
 import matplotlib.pyplot as plt
 import scipy.stats as st
 import numpy as np
 from scipy.optimize import fsolve
 import scipy as sc
-import math
 from pyteomics import pepxml
 import random
-import os
-import glob
 from collections import deque
 import pickle
 import importlib as imp
 from KDEpy import FFTKDE
 from sklearn.metrics import auc
 import lower as low
-import param_estim as pe
 imp.reload(low)
-imp.reload(plt)
-imp.reload(pe)
-import random
+
 lows = low.Tools()
 ems = low.EM()
 
@@ -671,6 +664,7 @@ class Analyze:
             
         return mus, betas
     
+    """
     @staticmethod
     def plot_fitted( arr, N0, a, alpha, col='blue', frac=1, bins=500):
         sorted_arr = np.array(sorted(arr))
@@ -682,6 +676,7 @@ class Analyze:
                     hist_kws=dict(histtype='step', linewidth=1, color='black'))
         #ax.set_xlim(l_lim, u_lim)
         plt.xlim(l_lim, u_lim)
+        """
         
         
     @staticmethod

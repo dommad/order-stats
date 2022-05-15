@@ -6,7 +6,8 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from sklearn.metrics import auc
-import scipy
+from scipy.optimize import minimize, newton
+from scipy.special import digamma
 import math
 from KDEpy import FFTKDE
 
@@ -26,14 +27,14 @@ class Tools:
         cdf = (N0* np.exp(x/a) + 1)*np.exp(-N0*np.exp(x/a))
         return cdf
 
-    def n_m2_cdf(x, N0, a):
+    def n_m2_cdf(self, x, N0, a):
 
-        cdf = (N0*N0)/2*np.exp((2*x/a) - N0*np.exp(x/a)) + n_m1_cdf(x, N0, a)
+        cdf = (N0*N0)/2*np.exp((2*x/a) - N0*np.exp(x/a)) + self.n_m1_cdf(x, N0, a)
         return cdf
 
-    def n_m3_cdf(x, N0, a):
+    def n_m3_cdf(self, x, N0, a):
 
-        cdf = pow(N0, 3)/6*np.exp( (3*x/a) - N0*np.exp(x/a) ) + n_m2_cdf(x, N0, a)
+        cdf = pow(N0, 3)/6*np.exp( (3*x/a) - N0*np.exp(x/a) ) + self.n_m2_cdf(x, N0, a)
         return cdf
 
     @staticmethod
@@ -70,13 +71,11 @@ class Tools:
     #MLEs
     
     def mle_universal(self, data, alpha):
-        res = scipy.optimize.minimize(
+        res = minimize(
         fun=lambda log_params, data,alpha: -self.log_like_universal(log_params, data, alpha),
         x0=np.array([1, -1]),
         args=(data,alpha,),
-           method='BFGS'
-
-        )
+           method='BFGS')
         n0, a = np.exp(res.x)
         a = -a
         n0 = n0
@@ -109,13 +108,11 @@ class Tools:
     
     
     def mle_new(self, data, alpha):
-        res = scipy.optimize.minimize(
+        res = minimize(
         fun=lambda log_params, data, alpha: -self.log_like_mubeta(log_params, data, alpha),
         x0=np.array([np.log(0.1), np.log(0.02)]),
         args=(data,alpha,),
-           method='BFGS'
-
-        )
+           method='BFGS')
         mu, beta = np.exp(res.x)
         return mu, beta
     
@@ -133,7 +130,7 @@ class Tools:
         #le = len(data)
         #data = data[int(le*0.05):int(le*0.95)]
         fac = math.factorial(k)
-        euler_m = -scipy.special.digamma(1)
+        euler_m = -digamma(1)
         trigamma = math.pi**2/6 - self.sum_squared(k+1)
         m1 = self.first_moment(data)
         m2 = self.second_moment(data)
@@ -191,7 +188,7 @@ class Tools:
     """
     def universal_ppf(self, p, alpha, mu, beta):
         
-        res = scipy.optimize.minimize(
+        res = minimize(
         fun=lambda log_params, p, mu, beta, alpha: self.universal_cdf(log_params, p, mu, beta, alpha),
         x0=0.1,
         args=(p,mu, beta, alpha,),
@@ -265,7 +262,7 @@ class EM:
         _, guess_beta = self.lows.mm_estimator(data, 0)
         #print(guess_beta)
         
-        new_beta = scipy.optimize.newton(self.find_beta, x0=guess_beta, args=(data, p_i))
+        new_beta = newton(self.find_beta, x0=guess_beta, args=(data, p_i))
         new_mu = new_beta*np.log(np.sum(p_i)/np.sum(np.exp(-data/new_beta)*p_i))
         return new_mu, new_beta
         
