@@ -13,6 +13,7 @@ from KDEpy import FFTKDE
 from sklearn.metrics import auc
 import lower as low
 imp.reload(low)
+import functools as fu
 
 lows = low.Tools()
 ems = low.EM()
@@ -22,35 +23,27 @@ class Analyze:
     def __init__(self, outname):
         self.lower_estimates = []
         self.out = outname
-    
-    
+        self.len_correct = 0
+        self.reps = 500
+
     def execute_estimation(self, files_paths):
         
         #1. parse the data from pepxml 
         
-        tev, charges, big_n = self.parse_pepxmls(files_paths)
-
-        tevs = []
-        big_ns = []
-        mle_params = []
-        mm_params = []
+        #tev, charges, big_n = self.parse_pepxmls(files_paths)
+        tev, charges, big_n = self.fast_parser(files_paths)
         
         #in this study only 2+, 3+, 4+ spectra are analyzed
         charge_list = [2,3,4]
-
-        for charge in charge_list:
-            
-            ct, cn  = self.filter_charge(tev, charges, big_n, charge)
-            print(f"length of {charge}+ is: {len(ct[:,0])}")
-            
-            tevs.append(ct)
-            big_ns.append(cn)
-            
-            mle_p = tuple(self.get_mle_params(ct))
-            mle_params.append(mle_p)
-            
-            mm_p = tuple(self.get_mm_params(ct))
-            mm_params.append(mm_p)
+        
+        data = list(map(fu.partial(self.process_params, 
+                                          tev=tev, charges=charges,
+                                           big_n=big_n), charge_list))
+        
+        tevs = [x[0] for x in data]
+        big_ns = [x[1] for x in data]
+        mle_params = [x[2] for x in data]
+        mm_params = [x[3] for x in data]
             
         #get the estimated parameters of top null models for each charge and plot the results
         self.plot_orders(mle_params, mm_params)
@@ -64,6 +57,12 @@ class Analyze:
         
         return self.lower_estimates
     
+    def process_params(self, charge, tev, charges, big_n):
+        ct, cn  = self.filter_charge(tev, charges, big_n, charge)
+        mle_p = tuple(self.get_mle_params(ct))
+        mm_p = tuple(self.get_mm_params(ct))
+        return ct, cn, mle_p, mm_p
+    
     @staticmethod
     def get_modes(params):
         linreg = st.linregress(params[0][4:], params[1][4:])
@@ -72,8 +71,8 @@ class Analyze:
         return linreg, mean_beta
     
     @staticmethod
-    def get_bic(data, k, order, params):
-        data = data[data < 0.17]
+    def get_bic(data, k, order, params, cutoff=0.17):
+        data = data[data < cutoff]
         log_params = np.log(params)
         log_like = lows.log_like_mubeta(log_params, data, order)
         bic = k*np.log(len(data)) - 2*log_like
@@ -162,13 +161,11 @@ class Analyze:
     def execute_validation(self, pepxml_file, ref_dict):
         
         #read the pepxml, automatically add the p-values based on lower order estimates
-        data = self.validation_df_random(pepxml_file, self.lower_estimates)
+        #data = self.validation_df_random(pepxml_file, self.lower_estimates)
+        scores, charges, lower_pvs, labels = self.faster_validation(pepxml_file, self.lower_estimates)
         
-        #generate decoy-based and EM-based parameters
-        decoy_params = self.get_decoy_params(data) 
-          
-        #get pure EM params      
-        _, em_params_em = self.get_em_params(data, outname='em')
+        decoy_params = self.get_decoy_params(charges, labels, scores) 
+        _, em_params_em = self.get_em_params(charges, labels, scores, outname='em')
         
         #get decoy EM params     
         #_, em_params_dec = self.get_em_params(data, decoy_params, outname='dec')
@@ -176,28 +173,37 @@ class Analyze:
         #get lower EM params     
         #_, em_params_low = self.get_em_params(data, self.lower_estimates, outname='lower')
         
-        #add other p-values to the main dataframe
-        data = self.add_pvs(data, decoy_params, colname='pv_dec')
-        data = self.add_pvs(data, em_params_em, colname='pv_em')
+        decoy_pvs = self.faster_add_pvs(scores, charges, decoy_params)
+        em_pvs = self.faster_add_pvs(scores, charges, em_params_em)
         
         #data = self.add_peps(data, em_params_low, colname='pep_low')
         #data = self.add_peps(data, em_params_dec, colname='pep_dec')
         #data = self.add_peps(data, em_params_em, colname='pep_em')
         #return data
-        #"""
+
         
         #conduct empirical bootstrap on all charges
         
-        charges = [2,3,4]
-        reps = 200
+        chars = [2,3,4]
         
-        all_boot_stats = []
+        all_boot_stats = deque()
         
-        for charge in charges:
+        idx_nondecoys = set(np.where(labels != 4)[0])
+        
+        for charge in chars:
+            print(f"this is charge {charge}...")
             
-            stats_low = self.bootstrap_stats(data, charge, reps, pv_type='pv_low', mode='single')
-            stats_dec = self.bootstrap_stats(data, charge, reps, pv_type='pv_dec', mode='single')
-            stats_em = self.bootstrap_stats(data, charge, reps, pv_type='pv_em', mode='single')
+            idx_charges = set(np.where(charges == charge)[0])
+            idx_shared = list(set.intersection(idx_nondecoys, idx_charges))
+            cur_labels = labels[idx_shared]
+            cur_lower = lower_pvs[idx_shared]
+            cur_decoy = decoy_pvs[idx_shared]
+            cur_em = em_pvs[idx_shared]
+            self.len_correct = len(cur_labels[cur_labels == 1])
+            
+            stats_low = self.bootstrap_stats(cur_labels, cur_lower)
+            stats_dec = self.bootstrap_stats(cur_labels, cur_decoy)
+            stats_em = self.bootstrap_stats(cur_labels, cur_em)
             
             all_boot_stats.append([stats_low, stats_dec, stats_em])
             
@@ -208,12 +214,14 @@ class Analyze:
         fig.savefig(f"./graphs/{self.out}_validation.png", dpi=600, bbox_inches='tight')
         
         return all_boot_stats
-        #"""
+     
+        
     
     #calculate and return the consolidated stats    
-    def bootstrap_stats(self, data, charge, reps, pv_type='pv_low', mode='single'):
-      
-        bootstrap_data = self.bootstrap_fdr(data, charge, reps, colname=pv_type, mode=mode)
+    def bootstrap_stats(self, labels, pvs):
+              
+        bootstrap_data = self.bootstrap_fdr(self.reps, labels, pvs, self.len_correct)
+        bootstrap_data = np.array(bootstrap_data)
         #CI type: 68%
         stats = self.val_stats(bootstrap_data, 0.32)
         return stats
@@ -300,7 +308,7 @@ class Analyze:
         
         if xy: ax.plot([0.0001,0.1], [0.0001, 0.1], c='gray')
         
-        print(fdp_stats)
+        #print(fdp_stats)
         
         ax.plot(fdrs, fdp_stats[0,:], color=col, linewidth=2)
         ax.fill_between(fdrs, fdp_stats[0,:], fdp_stats[2,:], alpha=0.2, color=col)
@@ -324,38 +332,48 @@ class Analyze:
 
 
     @staticmethod
-    def get_decoy_params(df):
+    def get_decoy_params(charges, labels, scores):
         
-        charges = np.arange(7) + 1
+        ch_idx = np.arange(7) + 1
         params = np.zeros((10,2))
-        
-        for ch in charges:
-            cur_tev = df[(df.charge == ch) & (df.label == 4)]['tev'].to_numpy()
-            if len(cur_tev) > 0:
-                params[ch, :] = lows.mle_new(cur_tev, 0)
- 
+        idx_labels = set(np.where(labels == 4)[0])
+                
+        for ch in ch_idx:
+            
+            idx_charges = set(np.where(charges == ch)[0])
+            idx_shared = list(set.intersection(idx_charges, idx_labels))
+            cur_scores = scores[idx_shared]
+            
+            if len(cur_scores) != 0:
+                params[ch,:] = lows.mle_new(cur_scores,0)
+                 
         return params
     
     
     
-    def get_em_params(self, df, fixed_pars=[], outname="em"):
+    def get_em_params(self, charges, labels, scores, fixed_pars=[], outname="em"):
         
-        charges = np.arange(7) + 1
         stats = np.zeros((10,5))
         null_params = np.zeros((10,2))
         
-        charges = [2,3,4]
+        chars = [2,3,4]
         fig, ax = plt.subplots(1, 3, figsize=(6, 2))
+        idx_labels = set(np.where(labels != 4)[0])
         
         for idx in range(3):
-            ch = charges[idx]
-            cur_tevs = df[(df.charge == ch) & (df.label != 4)]['tev'].to_numpy()
+            ch = chars[idx]
+            
+            idx_charges = set(np.where(charges == ch)[0])
+            idx_shared = list(set.intersection(idx_charges, idx_labels))
+            cur_scores = scores[idx_shared]
+            
+            #cur_tevs = df[(df.charge == ch) & (df.label != 4)]['tev'].to_numpy()
             if fixed_pars == []:
-                params_em = ems.em_algorithm(cur_tevs)
+                params_em = ems.em_algorithm(cur_scores)
             else:
-                params_em = ems.em_algorithm(cur_tevs, fixed_pars[ch])
+                params_em = ems.em_algorithm(cur_scores, fixed_pars[ch])
                 
-            ems.plot_em(ax[idx], cur_tevs, params_em)
+            ems.plot_em(ax[idx], cur_scores, params_em)
             stats[ch,:] = params_em
             null_params[ch,:] = params_em[:2]
             
@@ -393,7 +411,7 @@ class Analyze:
             ax.plot(axes, best_pi*theory, color='red', linestyle='-')
             
             ax.set_xlim(0.0, 0.6)
-            ax.set_ylim(0,)
+            ax.set_ylim(0,20)
             ax.set_xlabel("TEV")
             ax.set_ylabel("density")
 
@@ -442,27 +460,53 @@ class Analyze:
     
     
     
-
+    def bic_difference(self, data, k, order, mle_p, mm_p):
+            
+            bic_mm = self.get_bic(data, k, order, mm_p, cutoff=1)
+            bic_mle = self.get_bic(data, k, order, mle_p, cutoff=1)
+            
+            print(f"bic mm is {bic_mm} and bic mle is {bic_mle}")
+            print(f"difference mle - mm is {bic_mle-bic_mm}")
+            return 100*(bic_mm-bic_mle)/abs(bic_mle)
 
   
-    def plot_lower_orders(self, tevs, mle_params, mm_params, idx):
+    def plot_lower_orders(self, tevs, mle_par, mm_par, idx):
         
+        def kde_plots(ax, axes, mu, beta, hit):
+            
+            kde = lows.pdf_mubeta(axes, mu, beta, hit)
+            ax.plot(axes, kde)
+
+        def extract_pars(pars, hit):
+            return pars[0][hit], pars[1][hit]
+
+            
         fig, ax = plt.subplots(3,3, figsize=(6, 6), constrained_layout=True)
-        sss =1
+        hit = 1
         charge = idx-2
+        
+        bic_diffs = np.zeros(9)
         
         for row in range(3):
             for col in range(3):
-                axes, kde = FFTKDE(bw=0.0005, kernel='gaussian').fit(tevs[charge][:,sss]).evaluate(2**8)
-                ax[row%3, col].plot(axes, kde)
                 
-                mle_kde = lows.pdf_mubeta(axes, mle_params[charge][0][sss], mle_params[charge][1][sss], sss)
-                ax[row%3, col].plot(axes, mle_kde)
+                data = tevs[charge][:,hit]
+                axes, kde_org = FFTKDE(bw=0.0005, kernel='gaussian').fit(data).evaluate(2**8)
+                ax[row%3, col].plot(axes, kde_org)
                 
-                mm_kde = lows.pdf_mubeta(axes, mm_params[charge][0][sss], mm_params[charge][1][sss], sss)
-                ax[row%3, col].plot(axes, mm_kde)
+                mle_mu, mle_beta = extract_pars(mle_par[charge], hit)
+                mm_mu, mm_beta = extract_pars(mm_par[charge], hit)
+                print(f"MLE params: {mle_mu, mle_beta}, MM: {mm_mu, mm_beta}")
                 
+                kde_plots(ax[row%3, col], axes, mle_mu, mle_beta, hit)
+                kde_plots(ax[row%3, col], axes, mm_mu, mm_beta, hit)      
+                       
                 ax[row%3, col].set_ylim(0,)
+                
+                print(f"this is charge {charge}, hit {hit}")
+                bic_diffs[hit-1] = self.bic_difference(data, k=2, order=hit, 
+                                                       mle_p=[mle_mu, mle_beta], 
+                                                       mm_p=[mm_mu, mm_beta])
                 
                 if col == 0:
                     ax[row%3, col].set_ylabel("density")
@@ -470,10 +514,20 @@ class Analyze:
                     ax[row%3, col].set_xlabel("TEV")
                     
                 #ax[row%3, col].set_xlim(0, 0.4)
-                sss += 1
+                hit += 1
                 
         #fig.tight_layout()
         fig.savefig(f"./graphs/{self.out}_lower_models_{idx}.png", dpi=600, bbox_inches="tight")
+        
+        #plot BIC relative differences
+        fig, ax = plt.subplots(figsize=(6,3), constrained_layout=True)
+        support = np.arange(9) + 2
+        ax.scatter(support, bic_diffs)
+        ax.plot(support, bic_diffs)
+        ax.set_xlabel("order")
+        ax.set_ylabel("relative BIC difference [%]")
+        fig.savefig(f"./graphs/{self.out}_lower_models_BIC_{idx}.png", dpi=600, bbox_inches="tight")
+        
         
         
     @staticmethod    
@@ -610,6 +664,32 @@ class Analyze:
         fig.savefig(f"./graphs/{self.out}_mubeta_LR.png", dpi=600, bbox_inches="tight")
     
         
+    
+        
+    #may break if some search results have less than 10 entries
+    def fast_parser(self, paths):
+        
+        items = deque()
+        
+        for path in paths:
+            cur_file = pepxml.read(path)
+            data = list(cur_file.map(self.get_data))
+            items += data
+            
+        tev = [x[0] for x in items]
+        charges = [x[1] for x in items]
+        big_n = [x[2] for x in items]
+ 
+        return tev, charges, big_n
+    
+    @staticmethod
+    def get_data(row):
+        m = map(lambda x: -0.02*np.log(row['search_hit'][x]['search_score']['expect']/1000), np.arange(10))
+        charge = row['assumed_charge']
+        big_n = row['search_hit'][0]['num_matched_peptides']
+        return list(m), charge, big_n
+            
+            
         
     #input: pepxml files, output: np arrays (TEV score, charge, N)
     @staticmethod
@@ -870,7 +950,65 @@ class Analyze:
     
     
    ############### VALIDATION #################################
-   
+    @staticmethod
+    def get_val_data(row, pars):
+        
+        tev = -0.02 * np.log((row['search_hit'][0]['search_score']['expect']) / 1000)
+        ch = int(row['assumed_charge'])
+
+        if ch not in [2,3,4]:
+            pv = 1
+        else:
+            pv = 1 - lows.mubeta_cdf(tev, pars[ch][0], pars[ch][1])
+
+        return tev, ch, pv
+
+   #process randoms
+    def parse_data(self, idx, keywords, paths, labels, pars):
+        
+        keyword = keywords[idx]
+        label_value = labels[idx]
+        rand_paths = list(filter(lambda x: keyword in x, paths))
+        items = deque()
+        
+        for pepxml_file in rand_paths:
+            cur_file = pepxml.read(pepxml_file)
+            data = list(cur_file.map(self.get_val_data, args=(pars,)))
+            items += data
+
+        scores = [x[0] for x in items]
+        charges = [x[1] for x in items]
+        pvs = [x[2] for x in items]
+        labels = list(label_value*np.ones(len(items)))
+        
+        return scores, charges, pvs, labels
+    
+    def faster_validation(self, paths, pars):
+       
+        pvs = deque()
+        ground_truth = deque()
+        charges = deque()
+        scores = deque()        
+            
+        keywords = ["random", "decoy", "pos"]
+        labels = [0, 4, 1]
+
+        big_data = list(map(fu.partial(self.parse_data, keywords=keywords,
+                                            paths=paths, labels=labels, 
+                                            pars=pars), np.arange(3)))
+
+        for item in big_data:
+            scores += item[0]
+            charges += item[1]
+            pvs += item[2]
+            ground_truth += item[3]
+            
+    
+        #df = pd.DataFrame(np.array([pvs, ground_truth, charges, scores]).T) 
+        #df.head()
+        #df.columns = ['pv_low', 'label', 'charge', 'tev']
+        return np.array(scores), np.array(charges), np.array(pvs), np.array(ground_truth)
+    
    
     @staticmethod
     def validation_df_random(paths, pars):
@@ -985,45 +1123,58 @@ class Analyze:
         
         return finaldf
 
+    #when FDR is calculated using BH method
+    def reps_single(self, reps, length, pvs, labels, len_correct):
+        
+        random.seed()
+        new_sel = random.choices(length, k=len(length))
+        
+        new_pvs = pvs[new_sel]
+        new_labels = labels[new_sel]
+        
+        fdr, fdp, tp = self.fdr_lower(new_pvs, new_labels, len_correct)
+        
+        return fdr, fdp, tp
+        
 
     #generate bootstrapped fdp estimates
     #get subsample from df and calculate the stats for it, accumulate the stats 
-    def bootstrap_fdr(self, df, ch, reps, colname='pv_low', mode='single'):
+    def bootstrap_fdr(self, reps, labels, pvs, len_correct):
         
-        work_df = df[(df["charge"] == ch) & (df.label != 4)]
-        length = np.arange(len(work_df))
-        
+        length = np.arange(len(labels))
         #fdrs = np.linspace(0.0001, 0.1, 100)
-        fdrs = np.zeros((reps, 100))
-        fdps = np.zeros((reps, 100))
-        tps = np.zeros((reps,100))
+        fdrs = np.zeros((self.reps, 100))
+        fdps = np.zeros((self.reps, 100))
+        tps = np.zeros((self.reps, 100))
         
-        l = len(work_df)
-        em_fdps = np.zeros((reps, l))
-        em_tps = np.zeros((reps, l))
-        em_fdrs = np.zeros((reps, l))
+        data = list(map(fu.partial(self.reps_single, length=length,
+                                            pvs=pvs, labels=labels, 
+                                            len_correct=len_correct), np.zeros(reps)))
+        fdrs = [x[0] for x in data]
+        fdps = [x[1] for x in data]
+        tps = [x[2] for x in data]
         
-        for rep in range(reps):
-           
-            random.seed()
-            new_sel = random.choices(length, k=len(length))
-            new_df = work_df.iloc[new_sel, :]
-            if mode == 'single':
-                fdr, fdp, tp = self.fdr_lower(new_df, ch, colname=colname)
-                fdps[rep, :] = fdp
-                tps[rep,:] = tp
-                fdrs[rep,:] = fdr
-            else:
-                fdr, fdp, tp = self.pep_fdr(new_df, ch, colname=colname)
-                em_fdps[rep, :] = fdp
-                em_tps[rep,:] = tp
-                em_fdrs[rep,:] = fdr
-                
-        if mode == 'single':
-            return fdrs, fdps, tps
-        else:
-            return em_fdrs, em_fdps, em_tps
+        return fdrs, fdps, tps
+            
+    @staticmethod
+    def map_add_pvs(idx, scores, charges, pars):
+        
+        tev = scores[idx]
+        ch  = charges[idx]
+        pv = 1 - lows.mubeta_cdf(tev, pars[ch][0], pars[ch][1])
+        return pv
     
+    def faster_add_pvs(self,scores, charges, params):
+        
+        indices = np.arange(len(scores))
+        pvs = list(map(fu.partial(self.map_add_pvs, 
+                                  scores=scores, 
+                                   charges=charges, 
+                                   pars=params), indices))
+        return np.array(pvs)
+        
+        
+    """
     #add alternative p-values to the main dataframe
     @staticmethod
     def add_pvs(df, params, colname='pv_em'):
@@ -1039,6 +1190,7 @@ class Analyze:
         df[colname] = pvs
         
         return df
+    """
     
     @staticmethod
     def add_peps(df, params, colname='pep_em'):
@@ -1084,48 +1236,48 @@ class Analyze:
         
     
     
-
-    
+    @staticmethod
+    def get_fdr(fdr, pvs, labels, len_correct, idx_for_bh):
+        
+        bh = idx_for_bh*fdr/len(pvs)
+        
+        adj_index = np.where(pvs <= bh)[0]
+        len_accepted = len(adj_index)
+        adj_labels = labels[adj_index]
+               
+        if len_accepted == 0: len_accepted = 1
+        if len_correct == 0: len_correct = 1
+        
+        len_tps = len(adj_labels[adj_labels == 1])
+        
+        fdp = 1-len_tps/len_accepted
+        #dec = 2*len(ch3[ch3['label'] == 4])/len(ch3)
+        tp = len_tps/len_correct
+        
+        return fdp, tp
+        
     
     
    #generate the data of FDP and TP for the selected FDR range
-    def fdr_lower(self, df, ch, colname='pv_low'):
+    def fdr_lower(self, pvs, labels, len_correct):
         
-        fdps = []
         fdrs = np.linspace(0.0001, 0.1, 100)
-        #decs = []
-        tps = []
         
         #select only target PSMs of the desired charge
+        sorted_index = np.argsort(pvs)        
+        idx_for_bh = np.arange(len(pvs)) + 1
+        sorted_pvs = pvs[sorted_index]
+        sorted_labels = labels[sorted_index]
+     
+        #faster code for fdr calculation
+        data = list(map(fu.partial(self.get_fdr, pvs=sorted_pvs,
+                                   labels=sorted_labels,
+                                   len_correct=len_correct,
+                                   idx_for_bh=idx_for_bh), fdrs))
         
-        df = df[(df["label"] != 4) & (df["charge"] == ch)]
-        df.sort_values(colname, ascending=True, inplace=True)
-        df.reset_index(inplace=True, drop=True)
-        df.index += 1
-        
+        fdps = [x[0] for x in data]
+        tps = [x[1] for x in data]
 
-        for fdr in fdrs:
-            
-            bh = pd.Series((df.index.to_series() * fdr) / len(df))
-            adj = self.BH(df, bh, colname)
-            len_accepted = len(adj)
-            len_correct = len(df[df.label==1])
-            
-            if len_accepted == 0: len_accepted = 1
-            if len_correct == 0: len_correct = 1
-            
-            len_tps = len(adj[adj['label'] == 1])
-            
-            fdp = 1-len_tps/len_accepted
-            #dec = 2*len(ch3[ch3['label'] == 4])/len(ch3)
-            tp = len_tps/len_correct
-            
-            
-            tps.append(tp)
-            fdps.append(fdp)
-            #decs.append(dec)
-            
-            
         return fdrs, fdps, tps
             
     #plot both FDP and TP vs FDR in the same plot
