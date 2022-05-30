@@ -44,12 +44,17 @@ class Analyze:
         big_ns = [x[1] for x in data]
         mle_params = [x[2] for x in data]
         mm_params = [x[3] for x in data]
+        
+        print(f"length of 2+ is: {len(tevs[0][:,0])}")
+        print(f"length of 3+ is: {len(tevs[1][:,0])}")
+        print(f"length of 4+ is: {len(tevs[2][:,0])}")
+         
             
         #get the estimated parameters of top null models for each charge and plot the results
         self.plot_orders(mle_params, mm_params)
         self.plot_mubeta(mle_params, mm_params)
-        self.lower_estimates = self.plot_top_models(tevs, mle_params, mm_params)
-        #self.lower_estimates = self.alternative_top_models(tevs, mle_params, mm_params)
+        #self.lower_estimates = self.plot_top_models(tevs, mle_params, mm_params)
+        self.lower_estimates = self.alternative_top_models(tevs, mle_params, mm_params)
         
         #if necessary, plot lower order models data, select the charge
         for charge in charge_list:
@@ -71,7 +76,7 @@ class Analyze:
         return linreg, mean_beta
     
     @staticmethod
-    def get_bic(data, k, order, params, cutoff=0.17):
+    def get_bic(data, k, order, params, cutoff=0.2):
         data = data[data < cutoff]
         log_params = np.log(params)
         log_like = lows.log_like_mubeta(log_params, data, order)
@@ -95,7 +100,7 @@ class Analyze:
     def get_params_to_compare(self, data, linreg, beta):
         lr_mu, lr_beta = self.qq_lr(data, linreg)
         mean_mu, mean_beta = self.qq_mean(data, beta)
-        print(lr_mu, lr_beta, mean_mu, mean_beta)
+        #print(lr_mu, lr_beta, mean_mu, mean_beta)
         
         return lr_mu, lr_beta, mean_mu, mean_beta
     
@@ -108,7 +113,7 @@ class Analyze:
         for order in range(3):
             top_hit = tevs[order][:,0]
             #for the purpose of model selection using BIC
-            fifth_hit = tevs[order][:,3]
+            fifth_hit = tevs[order][:,0]
             
             #model selection
             mle_lr, mle_meanbeta = self.get_modes(mle_params[order])
@@ -124,20 +129,22 @@ class Analyze:
                 lr_mu, lr_beta, m_mu, m_beta = self.get_params_to_compare(fifth_hit, linreg, beta)
                 
                 #k=2 number of parameters estimated, 4 is the index of fifth_hit
-                bic_lr = self.get_bic(fifth_hit, 2, 4, [lr_mu, lr_beta])
-                bic_m = self.get_bic(fifth_hit, 2, 4, [m_mu, m_beta])
+                bic_lr = 0.8*self.get_bic(fifth_hit, 2, 0, [lr_mu, lr_beta])
+                bic_m = self.get_bic(fifth_hit, 2, 0, [m_mu, m_beta])
                 #bic_lr = self.get_difference(fifth_hit, 3, [lr_mu, lr_beta])
                 #bic_m = self.get_difference(fifth_hit, 3, [m_mu, m_beta])
                 #print(bic_lr, bic_m)
                 alt_params[k,:] = lr_mu, lr_beta
                 k += 1
                 alt_params[k,:] = m_mu, m_beta
+                if (lr_mu < 0) or (lr_beta < 0):
+                    bic_lr = 1e6
                 bics.append(bic_lr)
                 bics.append(bic_m)
                 k += 1
             
             best_index = bics.index(min(bics))
-            print(best_index)
+            #print(best_index)
             if best_index == 0:
                 best_name = "MLE+LR"
             elif best_index == 1:
@@ -151,14 +158,14 @@ class Analyze:
                          
             best_pi = self.find_pi(ax[order], top_hit, best_mu, best_beta)
             params[order+2,:] = [best_mu, best_beta]
-            print(best_mu, best_beta, best_pi, best_name)
+            #print(best_mu, best_beta, best_pi, best_name)
             
         fig.tight_layout()
         fig.savefig(f"./graphs/{self.out}_alt_top_models.png", dpi=600, bbox_inches="tight")
         return params
     
 
-    def execute_validation(self, pepxml_file, ref_dict):
+    def execute_validation(self, pepxml_file):
         
         #read the pepxml, automatically add the p-values based on lower order estimates
         #data = self.validation_df_random(pepxml_file, self.lower_estimates)
@@ -191,7 +198,7 @@ class Analyze:
         idx_nondecoys = set(np.where(labels != 4)[0])
         
         for charge in chars:
-            print(f"this is charge {charge}...")
+            #print(f"this is charge {charge}...")
             
             idx_charges = set(np.where(charges == charge)[0])
             idx_shared = list(set.intersection(idx_nondecoys, idx_charges))
@@ -433,7 +440,7 @@ class Analyze:
         for order in range(3):
             top_hit = tevs[order][:,0]
             if mle_params[order][2].rvalue > 0.99 and np.mean(list(map(lambda x: shift(mle_params[order][0], x), range(9)))) < 0:
-                print(f"{order}, 'MLE'")
+                #print(f"{order}, 'MLE'")
                 best_mu, best_beta = self.qq_lr(top_hit, mle_params[order][2])
 
                 if (best_mu < 0) or (best_beta < 0):
@@ -452,7 +459,7 @@ class Analyze:
                     
             best_pi = self.find_pi(ax[order], top_hit, best_mu, best_beta)
             params[order+2,:] = [best_mu, best_beta]
-            print(best_mu, best_beta, best_pi)
+            #print(best_mu, best_beta, best_pi)
             
         #fig.tight_layout()
         fig.savefig(f"./graphs/{self.out}_top_models.png", dpi=600, bbox_inches="tight")
@@ -465,8 +472,8 @@ class Analyze:
             bic_mm = self.get_bic(data, k, order, mm_p, cutoff=1)
             bic_mle = self.get_bic(data, k, order, mle_p, cutoff=1)
             
-            print(f"bic mm is {bic_mm} and bic mle is {bic_mle}")
-            print(f"difference mle - mm is {bic_mle-bic_mm}")
+            #print(f"bic mm is {bic_mm} and bic mle is {bic_mle}")
+            #print(f"difference mle - mm is {bic_mle-bic_mm}")
             return 100*(bic_mm-bic_mle)/abs(bic_mle)
 
   
@@ -496,14 +503,14 @@ class Analyze:
                 
                 mle_mu, mle_beta = extract_pars(mle_par[charge], hit)
                 mm_mu, mm_beta = extract_pars(mm_par[charge], hit)
-                print(f"MLE params: {mle_mu, mle_beta}, MM: {mm_mu, mm_beta}")
+                #print(f"MLE params: {mle_mu, mle_beta}, MM: {mm_mu, mm_beta}")
                 
                 kde_plots(ax[row%3, col], axes, mle_mu, mle_beta, hit)
                 kde_plots(ax[row%3, col], axes, mm_mu, mm_beta, hit)      
                        
                 ax[row%3, col].set_ylim(0,)
                 
-                print(f"this is charge {charge}, hit {hit}")
+                #print(f"this is charge {charge}, hit {hit}")
                 bic_diffs[hit-1] = self.bic_difference(data, k=2, order=hit, 
                                                        mle_p=[mle_mu, mle_beta], 
                                                        mm_p=[mm_mu, mm_beta])
@@ -592,9 +599,9 @@ class Analyze:
             ax[row].scatter(mle_x, mle_y, color=mle_c, marker='o', edgecolors='k',linewidths=0.5)
             ax[row].scatter(mm_x, mm_y, color=mm_c, marker='o', edgecolors='k',linewidths=0.5)
 
-            print(f"charge {row+2}, MLE params")
+            #print(f"charge {row+2}, MLE params")
             self.annotation(ax[row], mle_x, mle_y, mle_c)
-            print(f"charge {row+2}, MM params")
+            #print(f"charge {row+2}, MM params")
             self.annotation(ax[row], mm_x, mm_y, mm_c)
 
             ax[row].set_xlabel(r"$\mu$")
@@ -635,7 +642,7 @@ class Analyze:
 
         #plot linreg
         linreg = st.linregress(x, y)
-        print(linreg.rvalue)
+        #print(linreg.rvalue)
         #xs = np.array([min(x), max(x)])
         #ymin, ymax = linreg.slope*xs + linreg.intercept
         #ax.plot(xs, [ymin, ymax], color=col)
@@ -778,7 +785,7 @@ class Analyze:
         trim_n0 = list(n0)
         trim_a = list(a)
         linreg = st.linregress(trim_n0, trim_a)
-        print(linreg)
+        #print(linreg)
 
         fig = plt.figure(figsize=(4,4))
         plt.scatter(trim_n0, trim_a, marker='o', color='royalblue')
@@ -863,6 +870,8 @@ class Analyze:
         opt_idx = errors.index(min(errors))
         opt_mu = qq_range[opt_idx]
         
+        """
+        
         fig = plt.figure(figsize=(4,4))
         plt.plot(qq_range, errors)
         plt.scatter(qq_range, errors, s=1)
@@ -882,6 +891,8 @@ class Analyze:
         plt.xlabel("theoretical quantile")
         plt.ylabel('empirical quantile')
         #plt.savefig(f"./graphs/{self.out}_optim_QQ.png", dpi=600, bbox_inches='tight')
+        
+        """
         
         return opt_mu, opt_beta
 
@@ -923,6 +934,7 @@ class Analyze:
         opt_N0 = qq_range[opt_idx]
         opt_a = opt_N0*linreg.slope + linreg.intercept
         
+        """
         fig = plt.figure(figsize=(4,4))
         plt.plot(qq_range, errors)
         plt.scatter(qq_range, errors, s=1)
@@ -930,9 +942,10 @@ class Analyze:
         plt.xlabel("N0")
         plt.ylabel("loss")
         #plt.savefig(f"./graphs/{self.out}_optim_loss.png", dpi=600, bbox_inches='tight')
-
-        theor_q = lows.gumbel_new_ppf(emp_cdf, opt_N0, opt_a)
+        """
         
+        """
+        theor_q = lows.gumbel_new_ppf(emp_cdf, opt_N0, opt_a)
         fig1 = plt.figure(figsize=(4,4))
         plt.plot([0, 1], [0, 1], color='k')
         plt.scatter(emp_q, theor_q, s=3)
@@ -942,6 +955,7 @@ class Analyze:
         plt.xlabel("theoretical quantile")
         plt.ylabel('empirical quantile')
         #plt.savefig(f"./graphs/{self.out}_optim_QQ.png", dpi=600, bbox_inches='tight')
+        """
         
     
         return opt_N0, opt_a
