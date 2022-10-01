@@ -14,12 +14,9 @@ from sklearn.metrics import auc
 import lower as low
 imp.reload(low)
 import functools as fu
-<<<<<<< HEAD
 from xml.etree import ElementTree as ET
 import warnings
 warnings.filterwarnings("ignore")
-=======
->>>>>>> ddcb46ad03ffcc68743ff4d91089f03084867c02
 
 lows = low.Tools()
 ems = low.EM()
