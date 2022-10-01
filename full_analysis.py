@@ -14,18 +14,24 @@ from sklearn.metrics import auc
 import lower as low
 imp.reload(low)
 import functools as fu
+<<<<<<< HEAD
 from xml.etree import ElementTree as ET
 import warnings
 warnings.filterwarnings("ignore")
+=======
+>>>>>>> ddcb46ad03ffcc68743ff4d91089f03084867c02
 
 lows = low.Tools()
 ems = low.EM()
 
+<<<<<<< HEAD
 #import matplotlib as mpl
 #mpl.rcParams['font.family'] = 'PT Sans Caption'
 #plt.rcParams['axes.facecolor'] = '#FAF2E4'
 #mpl.rcParams.update({'font.size': 12})
 
+=======
+>>>>>>> ddcb46ad03ffcc68743ff4d91089f03084867c02
 class Analyze:
     
     def __init__(self, outname):
@@ -34,12 +40,21 @@ class Analyze:
         self.len_correct = 0
         self.reps = 500
 
+<<<<<<< HEAD
     def execute_estimation(self, files_paths, param_outname):
+=======
+    def execute_estimation(self, files_paths):
+>>>>>>> ddcb46ad03ffcc68743ff4d91089f03084867c02
         
         #1. parse the data from pepxml 
         
         #tev, charges, big_n = self.parse_pepxmls(files_paths)
         tev, charges, big_n = self.fast_parser(files_paths)
+<<<<<<< HEAD
+=======
+        
+        #in this study only 2+, 3+, 4+ spectra are analyzed
+>>>>>>> ddcb46ad03ffcc68743ff4d91089f03084867c02
         charge_list = [2,3,4]
         
         data = list(map(fu.partial(self.process_params, 
@@ -47,6 +62,7 @@ class Analyze:
                                            big_n=big_n), charge_list))
         
         tevs = [x[0] for x in data]
+<<<<<<< HEAD
         #big_ns = [x[1] for x in data]
         mle_params = [x[2] for x in data]
         mm_params = [x[3] for x in data]
@@ -75,6 +91,28 @@ class Analyze:
         
         return self.lower_estimates
         #return output
+=======
+        big_ns = [x[1] for x in data]
+        mle_params = [x[2] for x in data]
+        mm_params = [x[3] for x in data]
+        
+        print(f"length of 2+ is: {len(tevs[0][:,0])}")
+        print(f"length of 3+ is: {len(tevs[1][:,0])}")
+        print(f"length of 4+ is: {len(tevs[2][:,0])}")
+         
+            
+        #get the estimated parameters of top null models for each charge and plot the results
+        self.plot_orders(mle_params, mm_params)
+        self.plot_mubeta(mle_params, mm_params)
+        #self.lower_estimates = self.plot_top_models(tevs, mle_params, mm_params)
+        self.lower_estimates = self.alternative_top_models(tevs, mle_params, mm_params)
+        
+        #if necessary, plot lower order models data, select the charge
+        for charge in charge_list:
+            self.plot_lower_orders(tevs, mle_params, mm_params, charge)
+        
+        return self.lower_estimates
+>>>>>>> ddcb46ad03ffcc68743ff4d91089f03084867c02
     
     def process_params(self, charge, tev, charges, big_n):
         ct, cn  = self.filter_charge(tev, charges, big_n, charge)
@@ -90,8 +128,12 @@ class Analyze:
         return linreg, mean_beta
     
     @staticmethod
+<<<<<<< HEAD
     def get_bic(data, k, order, params, cutoff=0.15):
         #only portion of score distribution below the cutoff is used for optimization
+=======
+    def get_bic(data, k, order, params, cutoff=0.2):
+>>>>>>> ddcb46ad03ffcc68743ff4d91089f03084867c02
         data = data[data < cutoff]
         log_params = np.log(params)
         log_like = lows.log_like_mubeta(log_params, data, order)
@@ -104,11 +146,18 @@ class Analyze:
         #mu_diff = abs(best_mu-params[0])/best_mu
         beta_diff = abs(best_beta - params[1])/best_beta
         #print(params)
+<<<<<<< HEAD
 
         #if params negative ie not determined well, axe the case
         #by assigning big beta difference
         if params[1] < 0:
             beta_diff = 10e6
+=======
+        if params[1] < 0:
+            beta_diff = 10e6
+        
+        #print(f'beta_diff: {beta_diff}')
+>>>>>>> ddcb46ad03ffcc68743ff4d91089f03084867c02
               
         return beta_diff
     
@@ -121,12 +170,20 @@ class Analyze:
         return lr_mu, lr_beta, mean_mu, mean_beta
     
     
+<<<<<<< HEAD
     def alternative_top_models(self, tevs, mle_params, mm_params, ch_len):
+=======
+    def alternative_top_models(self, tevs, mle_params, mm_params):
+>>>>>>> ddcb46ad03ffcc68743ff4d91089f03084867c02
         
         fig, ax = plt.subplots(1,3,figsize=(6, 2))
         params = np.zeros((10,2))
         
+<<<<<<< HEAD
         for order in range(ch_len):
+=======
+        for order in range(3):
+>>>>>>> ddcb46ad03ffcc68743ff4d91089f03084867c02
             top_hit = tevs[order][:,0]
             #for the purpose of model selection using BIC
             fifth_hit = tevs[order][:,0]
@@ -161,7 +218,10 @@ class Analyze:
             
             best_index = bics.index(min(bics))
             #print(best_index)
+<<<<<<< HEAD
             """
+=======
+>>>>>>> ddcb46ad03ffcc68743ff4d91089f03084867c02
             if best_index == 0:
                 best_name = "MLE+LR"
             elif best_index == 1:
@@ -170,7 +230,10 @@ class Analyze:
                 best_name = "MM+LR"
             elif best_index == 3:
                 best_name = "MM+MB"
+<<<<<<< HEAD
             """
+=======
+>>>>>>> ddcb46ad03ffcc68743ff4d91089f03084867c02
             
             best_mu, best_beta = alt_params[best_index]
                          
@@ -232,15 +295,26 @@ class Analyze:
             
             all_boot_stats.append([stats_low, stats_dec, stats_em])
             
+<<<<<<< HEAD
         fig, ax = plt.subplots(3, 2, figsize=(6,6))
         self.plot_bootstrap_stats(ax[:,0], all_boot_stats)
         self.plot_bootstrap_tps(ax[:,1], all_boot_stats)
         fig.tight_layout()
         
+=======
+        fig, ax = plt.subplots(3, 2, figsize=(6,9))
+        self.plot_bootstrap_stats(ax[:,0], all_boot_stats)
+        self.plot_bootstrap_tps(ax[:,1], all_boot_stats)
+        fig.tight_layout()
+>>>>>>> ddcb46ad03ffcc68743ff4d91089f03084867c02
         fig.savefig(f"./graphs/{self.out}_validation.png", dpi=600, bbox_inches='tight')
         
         return all_boot_stats
      
+<<<<<<< HEAD
+=======
+        
+>>>>>>> ddcb46ad03ffcc68743ff4d91089f03084867c02
     
     #calculate and return the consolidated stats    
     def bootstrap_stats(self, labels, pvs):
@@ -285,17 +359,27 @@ class Analyze:
     def plot_bootstrap_stats(self, ax, all_stats):
         
         #fig, ax = plt.subplots(1, 3, figsize=(6, 2), constrained_layout=True)
+<<<<<<< HEAD
         cs = ['#2D58B8', '#D65215', '#2CB199']
         pis = [1.67, 1.1, 1.1]
+=======
+        cs = ['royalblue', 'orange', 'green']
+>>>>>>> ddcb46ad03ffcc68743ff4d91089f03084867c02
         
         for ch in range(3):
             for method in range(3):
                 fdrs = all_stats[ch][method][0][0,:]
                 fdps = all_stats[ch][method][1]
                 if method == 0:
+<<<<<<< HEAD
                     self.plot_stats(ax[ch], fdrs, pis[ch]*np.array(fdps), cs[method], xy=1)
                 else:
                     self.plot_stats(ax[ch], fdrs, pis[ch]*np.array(fdps), cs[method])
+=======
+                    self.plot_stats(ax[ch], fdrs, fdps, cs[method], xy=1)
+                else:
+                    self.plot_stats(ax[ch], fdrs, fdps, cs[method])
+>>>>>>> ddcb46ad03ffcc68743ff4d91089f03084867c02
 
             if ch == 2:
                 ax[ch].set_xlabel("FDR")
@@ -307,7 +391,11 @@ class Analyze:
     def plot_bootstrap_tps(self, ax, all_stats):
         
         #fig, ax = plt.subplots(1, 3, figsize=(6, 2), constrained_layout=True)
+<<<<<<< HEAD
         cs = ['#2D58B8', '#D65215', '#2CB199']
+=======
+        cs = ['royalblue', 'orange', 'green']
+>>>>>>> ddcb46ad03ffcc68743ff4d91089f03084867c02
         
         for ch in range(3):
             for method in range(3):
@@ -376,6 +464,10 @@ class Analyze:
         return params
     
     
+<<<<<<< HEAD
+=======
+    
+>>>>>>> ddcb46ad03ffcc68743ff4d91089f03084867c02
     def get_em_params(self, charges, labels, scores, fixed_pars=[], outname="em"):
         
         stats = np.zeros((10,5))
@@ -403,7 +495,10 @@ class Analyze:
             null_params[ch,:] = params_em[:2]
             
         fig.tight_layout()
+<<<<<<< HEAD
        
+=======
+>>>>>>> ddcb46ad03ffcc68743ff4d91089f03084867c02
         fig.savefig(f"./graphs/{self.out}_EM_{outname}.png", dpi=600, bbox_inches='tight')
     
         return null_params, stats
@@ -432,16 +527,26 @@ class Analyze:
             
         if plot:
             
+<<<<<<< HEAD
             ax.fill_between(axes, kde, alpha=0.2, color='#2CB199')
             ax.plot(axes, kde, color='#2CB199')
             ax.plot(axes, best_pi*theory, color='#D65215', linestyle='-')
+=======
+            ax.fill_between(axes, kde, alpha=0.2, color='green')
+            ax.plot(axes, kde, color='green')
+            ax.plot(axes, best_pi*theory, color='red', linestyle='-')
+>>>>>>> ddcb46ad03ffcc68743ff4d91089f03084867c02
             
             ax.set_xlim(0.0, 0.6)
             ax.set_ylim(0,20)
             ax.set_xlabel("TEV")
             ax.set_ylabel("density")
+<<<<<<< HEAD
     
     
+=======
+
+>>>>>>> ddcb46ad03ffcc68743ff4d91089f03084867c02
         return best_pi
 
             
@@ -482,7 +587,10 @@ class Analyze:
             #print(best_mu, best_beta, best_pi)
             
         #fig.tight_layout()
+<<<<<<< HEAD
      
+=======
+>>>>>>> ddcb46ad03ffcc68743ff4d91089f03084867c02
         fig.savefig(f"./graphs/{self.out}_top_models.png", dpi=600, bbox_inches="tight")
         return params
     
@@ -500,6 +608,7 @@ class Analyze:
   
     def plot_lower_orders(self, tevs, mle_par, mm_par, idx):
         
+<<<<<<< HEAD
         def kde_plots(ax, axes, mu, beta, hit, color):
             
             kde = lows.pdf_mubeta(axes, mu, beta, hit)
@@ -509,6 +618,12 @@ class Analyze:
             df.to_csv(f"scores_{hit}_{idx}.csv",sep="\t")
                 
             
+=======
+        def kde_plots(ax, axes, mu, beta, hit):
+            
+            kde = lows.pdf_mubeta(axes, mu, beta, hit)
+            ax.plot(axes, kde)
+>>>>>>> ddcb46ad03ffcc68743ff4d91089f03084867c02
 
         def extract_pars(pars, hit):
             return pars[0][hit], pars[1][hit]
@@ -525,14 +640,23 @@ class Analyze:
                 
                 data = tevs[charge][:,hit]
                 axes, kde_org = FFTKDE(bw=0.0005, kernel='gaussian').fit(data).evaluate(2**8)
+<<<<<<< HEAD
                 ax[row%3, col].plot(axes, kde_org, color='#2D58B8')
+=======
+                ax[row%3, col].plot(axes, kde_org)
+>>>>>>> ddcb46ad03ffcc68743ff4d91089f03084867c02
                 
                 mle_mu, mle_beta = extract_pars(mle_par[charge], hit)
                 mm_mu, mm_beta = extract_pars(mm_par[charge], hit)
                 #print(f"MLE params: {mle_mu, mle_beta}, MM: {mm_mu, mm_beta}")
                 
+<<<<<<< HEAD
                 kde_plots(ax[row%3, col], axes, mle_mu, mle_beta, hit, color='#D65215')
                 kde_plots(ax[row%3, col], axes, mm_mu, mm_beta, hit, color='#2CB199')      
+=======
+                kde_plots(ax[row%3, col], axes, mle_mu, mle_beta, hit)
+                kde_plots(ax[row%3, col], axes, mm_mu, mm_beta, hit)      
+>>>>>>> ddcb46ad03ffcc68743ff4d91089f03084867c02
                        
                 ax[row%3, col].set_ylim(0,)
                 
@@ -550,14 +674,22 @@ class Analyze:
                 hit += 1
                 
         #fig.tight_layout()
+<<<<<<< HEAD
  
+=======
+>>>>>>> ddcb46ad03ffcc68743ff4d91089f03084867c02
         fig.savefig(f"./graphs/{self.out}_lower_models_{idx}.png", dpi=600, bbox_inches="tight")
         
         #plot BIC relative differences
         fig, ax = plt.subplots(figsize=(6,3), constrained_layout=True)
         support = np.arange(9) + 2
+<<<<<<< HEAD
         ax.scatter(support, bic_diffs, color='#2D58B8')
         ax.plot(support, bic_diffs, color='#2D58B8')
+=======
+        ax.scatter(support, bic_diffs)
+        ax.plot(support, bic_diffs)
+>>>>>>> ddcb46ad03ffcc68743ff4d91089f03084867c02
         ax.set_xlabel("order")
         ax.set_ylabel("relative BIC difference [%]")
         fig.savefig(f"./graphs/{self.out}_lower_models_BIC_{idx}.png", dpi=600, bbox_inches="tight")
@@ -585,7 +717,11 @@ class Analyze:
         sss =1
         for row in range(3):
             for col in range(3):
+<<<<<<< HEAD
                 self.plot_fit(ax[row%3, col], tev[alpha][:,sss], params[alpha][0][sss], params[alpha][1][sss], sss, col='#2D58B8', frac=1, bins=500)
+=======
+                self.plot_fit(ax[row%3, col], tev[alpha][:,sss], params[alpha][0][sss], params[alpha][1][sss], sss, col='blue', frac=1, bins=500)
+>>>>>>> ddcb46ad03ffcc68743ff4d91089f03084867c02
                 sss += 1
         #fig.savefig('yeast_3Da_1Da_f_lowerhits.png', dpi=400, bbox_inches='tight')
         
@@ -594,7 +730,10 @@ class Analyze:
     def plot_orders(self, mle_params, mm_params):
         no_orders = 10
         fig, ax = plt.subplots(2,3, figsize=(6,3), constrained_layout=True)
+<<<<<<< HEAD
         cs = ['#2D58B8', '#D65215', '#2CB199']
+=======
+>>>>>>> ddcb46ad03ffcc68743ff4d91089f03084867c02
     
         for row in range(2):
             for col in range(3):
@@ -611,7 +750,10 @@ class Analyze:
                         ax[row, col].set_xlabel("order")
         
         #fig.tight_layout()
+<<<<<<< HEAD
 
+=======
+>>>>>>> ddcb46ad03ffcc68743ff4d91089f03084867c02
         fig.savefig(f"./graphs/{self.out}_mle_mm_params.png", dpi=600, bbox_inches="tight")
 
     
@@ -620,8 +762,13 @@ class Analyze:
         fig, ax = plt.subplots(1,3, figsize=(9,3))
     
         for row in range(3):
+<<<<<<< HEAD
             mle_c = '#2D58B8'
             mm_c = '#D65215'
+=======
+            mle_c = 'royalblue'
+            mm_c = 'orange'
+>>>>>>> ddcb46ad03ffcc68743ff4d91089f03084867c02
             mle_x, mle_y = mle_params[row][0][3:], mle_params[row][1][3:]
             mm_x, mm_y = mm_params[row][0][3:], mm_params[row][1][3:]
 
@@ -634,8 +781,13 @@ class Analyze:
             self.annotation(ax[row], mm_x, mm_y, mm_c)
 
             ax[row].set_xlabel(r"$\mu$")
+<<<<<<< HEAD
             #if row == 0:
             ax[row].set_ylabel(r"$\beta$")
+=======
+            if row == 0:
+                ax[row].set_ylabel(r"$\beta$")
+>>>>>>> ddcb46ad03ffcc68743ff4d91089f03084867c02
               
         
         fig.tight_layout()
@@ -644,6 +796,7 @@ class Analyze:
         fig, ax = plt.subplots(1,3, figsize=(9,3))
     
         for row in range(3):
+<<<<<<< HEAD
             mle_c = '#2D58B8'
             mm_c = '#D65215'
             mle_x, mle_y = mle_params[row][0][3:], mle_params[row][1][3:]
@@ -654,6 +807,13 @@ class Analyze:
 
             ax[row].plot(mle_x[0]*mle_lr.slope + mle_lr.intercept, )
 
+=======
+            mle_c = 'royalblue'
+            mm_c = 'orange'
+            mle_x, mle_y = mle_params[row][0][3:], mle_params[row][1][3:]
+            mm_x, mm_y = mm_params[row][0][3:], mm_params[row][1][3:]
+
+>>>>>>> ddcb46ad03ffcc68743ff4d91089f03084867c02
             ax[row].scatter(mle_x, mle_y, color=mle_c, marker='o', edgecolors='k',linewidths=0.5)
             ax[row].scatter(mm_x, mm_y, color=mm_c, marker='o', edgecolors='k',linewidths=0.5)
 
@@ -661,6 +821,7 @@ class Analyze:
             #self.annotation(ax[row], mm_x, mm_y, mm_c)
 
             ax[row].set_xlabel(r"$\mu$")
+<<<<<<< HEAD
             #if row == 0:
             ax[row].set_ylabel(r"$\beta$")
 
@@ -668,6 +829,13 @@ class Analyze:
        
         fig.savefig(f"./graphs/{self.out}_mubeta_params_clean.png", dpi=600, bbox_inches="tight")
         return (mle_params, mm_params)
+=======
+            if row == 0:
+                ax[row].set_ylabel(r"$\beta$")
+
+        fig.tight_layout()
+        fig.savefig(f"./graphs/{self.out}_mubeta_params_clean.png", dpi=600, bbox_inches="tight")
+>>>>>>> ddcb46ad03ffcc68743ff4d91089f03084867c02
 
     
     def annotation(self, ax, x, y, col):
@@ -693,8 +861,13 @@ class Analyze:
         
         for col in range(3):
             
+<<<<<<< HEAD
             ax[col].scatter(mle_params[col][0][offset:], mle_params[col][1][offset:], marker='.', color='#2D58B8')
             ax[col].scatter(mm_params[col][0][offset:], mm_params[col][1][offset:], marker='.', color='#D65215')
+=======
+            ax[col].scatter(mle_params[col][0][offset:], mle_params[col][1][offset:], marker='.', color='royalblue')
+            ax[col].scatter(mm_params[col][0][offset:], mm_params[col][1][offset:], marker='.', color='orange')
+>>>>>>> ddcb46ad03ffcc68743ff4d91089f03084867c02
             
             if col == 0:
                 ax[col].set_ylabel(r"$\beta$")
@@ -704,7 +877,10 @@ class Analyze:
         
         
         fig.tight_layout()
+<<<<<<< HEAD
 
+=======
+>>>>>>> ddcb46ad03ffcc68743ff4d91089f03084867c02
         fig.savefig(f"./graphs/{self.out}_mubeta_LR.png", dpi=600, bbox_inches="tight")
     
         
@@ -804,7 +980,11 @@ class Analyze:
         
         
     @staticmethod
+<<<<<<< HEAD
     def plot_fit(ax, arr, N0, a, alpha, col='#2D58B8', frac=1, bins=500):
+=======
+    def plot_fit(ax, arr, N0, a, alpha, col='blue', frac=1, bins=500):
+>>>>>>> ddcb46ad03ffcc68743ff4d91089f03084867c02
         sorted_arr = np.array(sorted(arr))
         #l_lim = sorted_arr[0]
         #u_lim = sorted_arr[-1]
@@ -825,7 +1005,11 @@ class Analyze:
         #print(linreg)
 
         fig = plt.figure(figsize=(4,4))
+<<<<<<< HEAD
         plt.scatter(trim_n0, trim_a, marker='o', color='#2D58B8')
+=======
+        plt.scatter(trim_n0, trim_a, marker='o', color='royalblue')
+>>>>>>> ddcb46ad03ffcc68743ff4d91089f03084867c02
         plt.plot([min(trim_n0), max(trim_n0)], 
                     [min(trim_n0)*linreg.slope + linreg.intercept, 
                     max(trim_n0)*linreg.slope + linreg.intercept], color='grey')
@@ -837,7 +1021,11 @@ class Analyze:
             plt.annotate(x+xxx, (trim_n0[x]+0.00001, trim_a[x]+0.00003))
             
         #plt.hlines(xmin=min(trim_n0)-0.0001, xmax=max(trim_n0)+0.0001, y=0.02, linestyles='--')
+<<<<<<< HEAD
       
+=======
+
+>>>>>>> ddcb46ad03ffcc68743ff4d91089f03084867c02
         fig.savefig(f'./graphs/{self.out}_params.png', bbox_inches='tight', dpi=600)
             
             
@@ -1000,7 +1188,11 @@ class Analyze:
     ###########################################################
     
     
+<<<<<<< HEAD
    ############### VALIDATION with BH procedure #############
+=======
+   ############### VALIDATION #################################
+>>>>>>> ddcb46ad03ffcc68743ff4d91089f03084867c02
     @staticmethod
     def get_val_data(row, pars):
         
@@ -1394,6 +1586,7 @@ class Analyze:
         return fdrs, fdp, tps
     
      ###########################################################
+<<<<<<< HEAD
 
        ############### VALIDATION with PeptideProphet ###########
     @staticmethod
@@ -1531,3 +1724,6 @@ class Analyze:
 
 
                             
+=======
+                        
+>>>>>>> ddcb46ad03ffcc68743ff4d91089f03084867c02
