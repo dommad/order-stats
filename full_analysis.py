@@ -14,9 +14,17 @@ from sklearn.metrics import auc
 import lower as low
 imp.reload(low)
 import functools as fu
+from xml.etree import ElementTree as ET
+import warnings
+warnings.filterwarnings("ignore")
 
 lows = low.Tools()
 ems = low.EM()
+
+#import matplotlib as mpl
+#mpl.rcParams['font.family'] = 'PT Sans Caption'
+#plt.rcParams['axes.facecolor'] = '#FAF2E4'
+#mpl.rcParams.update({'font.size': 12})
 
 class Analyze:
     
@@ -26,14 +34,12 @@ class Analyze:
         self.len_correct = 0
         self.reps = 500
 
-    def execute_estimation(self, files_paths):
+    def execute_estimation(self, files_paths, param_outname):
         
         #1. parse the data from pepxml 
         
         #tev, charges, big_n = self.parse_pepxmls(files_paths)
         tev, charges, big_n = self.fast_parser(files_paths)
-        
-        #in this study only 2+, 3+, 4+ spectra are analyzed
         charge_list = [2,3,4]
         
         data = list(map(fu.partial(self.process_params, 
@@ -41,26 +47,34 @@ class Analyze:
                                            big_n=big_n), charge_list))
         
         tevs = [x[0] for x in data]
-        big_ns = [x[1] for x in data]
+        #big_ns = [x[1] for x in data]
         mle_params = [x[2] for x in data]
         mm_params = [x[3] for x in data]
         
-        print(f"length of 2+ is: {len(tevs[0][:,0])}")
-        print(f"length of 3+ is: {len(tevs[1][:,0])}")
-        print(f"length of 4+ is: {len(tevs[2][:,0])}")
+        #print(f"length of 2+ is: {len(tevs[0][:,0])}")
+        #print(f"length of 3+ is: {len(tevs[1][:,0])}")
+        #print(f"length of 4+ is: {len(tevs[2][:,0])}")
          
             
         #get the estimated parameters of top null models for each charge and plot the results
-        self.plot_orders(mle_params, mm_params)
-        self.plot_mubeta(mle_params, mm_params)
+        #self.plot_orders(mle_params, mm_params)
+        #output = self.plot_mubeta(mle_params, mm_params)
         #self.lower_estimates = self.plot_top_models(tevs, mle_params, mm_params)
-        self.lower_estimates = self.alternative_top_models(tevs, mle_params, mm_params)
+        self.lower_estimates = self.alternative_top_models(tevs, mle_params, mm_params, len(charge_list))
         
-        #if necessary, plot lower order models data, select the charge
+        #if necessary, plot lower order models data
         for charge in charge_list:
             self.plot_lower_orders(tevs, mle_params, mm_params, charge)
+
+        #export the parameters to txt compatible with modified PeptideProphet (mean & std instead of mu & beta)
+        ps = pd.DataFrame(self.lower_estimates[1:])
+        ps[0] = ps[0] + ps[1]*np.euler_gamma
+        ps[1] = np.pi/np.sqrt(6)*ps[1]
+        ps.to_csv(f"{param_outname}.txt", sep=" ", header=None, index=None)
+
         
         return self.lower_estimates
+        #return output
     
     def process_params(self, charge, tev, charges, big_n):
         ct, cn  = self.filter_charge(tev, charges, big_n, charge)
@@ -76,7 +90,8 @@ class Analyze:
         return linreg, mean_beta
     
     @staticmethod
-    def get_bic(data, k, order, params, cutoff=0.2):
+    def get_bic(data, k, order, params, cutoff=0.15):
+        #only portion of score distribution below the cutoff is used for optimization
         data = data[data < cutoff]
         log_params = np.log(params)
         log_like = lows.log_like_mubeta(log_params, data, order)
@@ -89,10 +104,11 @@ class Analyze:
         #mu_diff = abs(best_mu-params[0])/best_mu
         beta_diff = abs(best_beta - params[1])/best_beta
         #print(params)
+
+        #if params negative ie not determined well, axe the case
+        #by assigning big beta difference
         if params[1] < 0:
             beta_diff = 10e6
-        
-        #print(f'beta_diff: {beta_diff}')
               
         return beta_diff
     
@@ -105,12 +121,12 @@ class Analyze:
         return lr_mu, lr_beta, mean_mu, mean_beta
     
     
-    def alternative_top_models(self, tevs, mle_params, mm_params):
+    def alternative_top_models(self, tevs, mle_params, mm_params, ch_len):
         
         fig, ax = plt.subplots(1,3,figsize=(6, 2))
         params = np.zeros((10,2))
         
-        for order in range(3):
+        for order in range(ch_len):
             top_hit = tevs[order][:,0]
             #for the purpose of model selection using BIC
             fifth_hit = tevs[order][:,0]
@@ -145,6 +161,7 @@ class Analyze:
             
             best_index = bics.index(min(bics))
             #print(best_index)
+            """
             if best_index == 0:
                 best_name = "MLE+LR"
             elif best_index == 1:
@@ -153,6 +170,7 @@ class Analyze:
                 best_name = "MM+LR"
             elif best_index == 3:
                 best_name = "MM+MB"
+            """
             
             best_mu, best_beta = alt_params[best_index]
                          
@@ -214,15 +232,15 @@ class Analyze:
             
             all_boot_stats.append([stats_low, stats_dec, stats_em])
             
-        fig, ax = plt.subplots(3, 2, figsize=(6,9))
+        fig, ax = plt.subplots(3, 2, figsize=(6,6))
         self.plot_bootstrap_stats(ax[:,0], all_boot_stats)
         self.plot_bootstrap_tps(ax[:,1], all_boot_stats)
         fig.tight_layout()
+        
         fig.savefig(f"./graphs/{self.out}_validation.png", dpi=600, bbox_inches='tight')
         
         return all_boot_stats
      
-        
     
     #calculate and return the consolidated stats    
     def bootstrap_stats(self, labels, pvs):
@@ -267,16 +285,17 @@ class Analyze:
     def plot_bootstrap_stats(self, ax, all_stats):
         
         #fig, ax = plt.subplots(1, 3, figsize=(6, 2), constrained_layout=True)
-        cs = ['royalblue', 'orange', 'green']
+        cs = ['#2D58B8', '#D65215', '#2CB199']
+        pis = [1.67, 1.1, 1.1]
         
         for ch in range(3):
             for method in range(3):
                 fdrs = all_stats[ch][method][0][0,:]
                 fdps = all_stats[ch][method][1]
                 if method == 0:
-                    self.plot_stats(ax[ch], fdrs, fdps, cs[method], xy=1)
+                    self.plot_stats(ax[ch], fdrs, pis[ch]*np.array(fdps), cs[method], xy=1)
                 else:
-                    self.plot_stats(ax[ch], fdrs, fdps, cs[method])
+                    self.plot_stats(ax[ch], fdrs, pis[ch]*np.array(fdps), cs[method])
 
             if ch == 2:
                 ax[ch].set_xlabel("FDR")
@@ -288,7 +307,7 @@ class Analyze:
     def plot_bootstrap_tps(self, ax, all_stats):
         
         #fig, ax = plt.subplots(1, 3, figsize=(6, 2), constrained_layout=True)
-        cs = ['royalblue', 'orange', 'green']
+        cs = ['#2D58B8', '#D65215', '#2CB199']
         
         for ch in range(3):
             for method in range(3):
@@ -357,7 +376,6 @@ class Analyze:
         return params
     
     
-    
     def get_em_params(self, charges, labels, scores, fixed_pars=[], outname="em"):
         
         stats = np.zeros((10,5))
@@ -385,6 +403,7 @@ class Analyze:
             null_params[ch,:] = params_em[:2]
             
         fig.tight_layout()
+       
         fig.savefig(f"./graphs/{self.out}_EM_{outname}.png", dpi=600, bbox_inches='tight')
     
         return null_params, stats
@@ -413,15 +432,16 @@ class Analyze:
             
         if plot:
             
-            ax.fill_between(axes, kde, alpha=0.2, color='green')
-            ax.plot(axes, kde, color='green')
-            ax.plot(axes, best_pi*theory, color='red', linestyle='-')
+            ax.fill_between(axes, kde, alpha=0.2, color='#2CB199')
+            ax.plot(axes, kde, color='#2CB199')
+            ax.plot(axes, best_pi*theory, color='#D65215', linestyle='-')
             
             ax.set_xlim(0.0, 0.6)
             ax.set_ylim(0,20)
             ax.set_xlabel("TEV")
             ax.set_ylabel("density")
-
+    
+    
         return best_pi
 
             
@@ -462,6 +482,7 @@ class Analyze:
             #print(best_mu, best_beta, best_pi)
             
         #fig.tight_layout()
+     
         fig.savefig(f"./graphs/{self.out}_top_models.png", dpi=600, bbox_inches="tight")
         return params
     
@@ -479,10 +500,15 @@ class Analyze:
   
     def plot_lower_orders(self, tevs, mle_par, mm_par, idx):
         
-        def kde_plots(ax, axes, mu, beta, hit):
+        def kde_plots(ax, axes, mu, beta, hit, color):
             
             kde = lows.pdf_mubeta(axes, mu, beta, hit)
-            ax.plot(axes, kde)
+            ax.plot(axes, kde, color=color)
+            
+            df = pd.DataFrame(data = np.array([axes, kde]).T)
+            df.to_csv(f"scores_{hit}_{idx}.csv",sep="\t")
+                
+            
 
         def extract_pars(pars, hit):
             return pars[0][hit], pars[1][hit]
@@ -499,14 +525,14 @@ class Analyze:
                 
                 data = tevs[charge][:,hit]
                 axes, kde_org = FFTKDE(bw=0.0005, kernel='gaussian').fit(data).evaluate(2**8)
-                ax[row%3, col].plot(axes, kde_org)
+                ax[row%3, col].plot(axes, kde_org, color='#2D58B8')
                 
                 mle_mu, mle_beta = extract_pars(mle_par[charge], hit)
                 mm_mu, mm_beta = extract_pars(mm_par[charge], hit)
                 #print(f"MLE params: {mle_mu, mle_beta}, MM: {mm_mu, mm_beta}")
                 
-                kde_plots(ax[row%3, col], axes, mle_mu, mle_beta, hit)
-                kde_plots(ax[row%3, col], axes, mm_mu, mm_beta, hit)      
+                kde_plots(ax[row%3, col], axes, mle_mu, mle_beta, hit, color='#D65215')
+                kde_plots(ax[row%3, col], axes, mm_mu, mm_beta, hit, color='#2CB199')      
                        
                 ax[row%3, col].set_ylim(0,)
                 
@@ -524,13 +550,14 @@ class Analyze:
                 hit += 1
                 
         #fig.tight_layout()
+ 
         fig.savefig(f"./graphs/{self.out}_lower_models_{idx}.png", dpi=600, bbox_inches="tight")
         
         #plot BIC relative differences
         fig, ax = plt.subplots(figsize=(6,3), constrained_layout=True)
         support = np.arange(9) + 2
-        ax.scatter(support, bic_diffs)
-        ax.plot(support, bic_diffs)
+        ax.scatter(support, bic_diffs, color='#2D58B8')
+        ax.plot(support, bic_diffs, color='#2D58B8')
         ax.set_xlabel("order")
         ax.set_ylabel("relative BIC difference [%]")
         fig.savefig(f"./graphs/{self.out}_lower_models_BIC_{idx}.png", dpi=600, bbox_inches="tight")
@@ -558,7 +585,7 @@ class Analyze:
         sss =1
         for row in range(3):
             for col in range(3):
-                self.plot_fit(ax[row%3, col], tev[alpha][:,sss], params[alpha][0][sss], params[alpha][1][sss], sss, col='blue', frac=1, bins=500)
+                self.plot_fit(ax[row%3, col], tev[alpha][:,sss], params[alpha][0][sss], params[alpha][1][sss], sss, col='#2D58B8', frac=1, bins=500)
                 sss += 1
         #fig.savefig('yeast_3Da_1Da_f_lowerhits.png', dpi=400, bbox_inches='tight')
         
@@ -567,6 +594,7 @@ class Analyze:
     def plot_orders(self, mle_params, mm_params):
         no_orders = 10
         fig, ax = plt.subplots(2,3, figsize=(6,3), constrained_layout=True)
+        cs = ['#2D58B8', '#D65215', '#2CB199']
     
         for row in range(2):
             for col in range(3):
@@ -583,6 +611,7 @@ class Analyze:
                         ax[row, col].set_xlabel("order")
         
         #fig.tight_layout()
+
         fig.savefig(f"./graphs/{self.out}_mle_mm_params.png", dpi=600, bbox_inches="tight")
 
     
@@ -591,8 +620,8 @@ class Analyze:
         fig, ax = plt.subplots(1,3, figsize=(9,3))
     
         for row in range(3):
-            mle_c = 'royalblue'
-            mm_c = 'orange'
+            mle_c = '#2D58B8'
+            mm_c = '#D65215'
             mle_x, mle_y = mle_params[row][0][3:], mle_params[row][1][3:]
             mm_x, mm_y = mm_params[row][0][3:], mm_params[row][1][3:]
 
@@ -605,8 +634,8 @@ class Analyze:
             self.annotation(ax[row], mm_x, mm_y, mm_c)
 
             ax[row].set_xlabel(r"$\mu$")
-            if row == 0:
-                ax[row].set_ylabel(r"$\beta$")
+            #if row == 0:
+            ax[row].set_ylabel(r"$\beta$")
               
         
         fig.tight_layout()
@@ -615,10 +644,15 @@ class Analyze:
         fig, ax = plt.subplots(1,3, figsize=(9,3))
     
         for row in range(3):
-            mle_c = 'royalblue'
-            mm_c = 'orange'
+            mle_c = '#2D58B8'
+            mm_c = '#D65215'
             mle_x, mle_y = mle_params[row][0][3:], mle_params[row][1][3:]
             mm_x, mm_y = mm_params[row][0][3:], mm_params[row][1][3:]
+
+            mle_lr = st.linregress(mle_x, mle_y)
+            mm_lr = st.linregress(mm_x, mm_y)
+
+            ax[row].plot(mle_x[0]*mle_lr.slope + mle_lr.intercept, )
 
             ax[row].scatter(mle_x, mle_y, color=mle_c, marker='o', edgecolors='k',linewidths=0.5)
             ax[row].scatter(mm_x, mm_y, color=mm_c, marker='o', edgecolors='k',linewidths=0.5)
@@ -627,11 +661,13 @@ class Analyze:
             #self.annotation(ax[row], mm_x, mm_y, mm_c)
 
             ax[row].set_xlabel(r"$\mu$")
-            if row == 0:
-                ax[row].set_ylabel(r"$\beta$")
+            #if row == 0:
+            ax[row].set_ylabel(r"$\beta$")
 
         fig.tight_layout()
+       
         fig.savefig(f"./graphs/{self.out}_mubeta_params_clean.png", dpi=600, bbox_inches="tight")
+        return (mle_params, mm_params)
 
     
     def annotation(self, ax, x, y, col):
@@ -657,8 +693,8 @@ class Analyze:
         
         for col in range(3):
             
-            ax[col].scatter(mle_params[col][0][offset:], mle_params[col][1][offset:], marker='.', color='royalblue')
-            ax[col].scatter(mm_params[col][0][offset:], mm_params[col][1][offset:], marker='.', color='orange')
+            ax[col].scatter(mle_params[col][0][offset:], mle_params[col][1][offset:], marker='.', color='#2D58B8')
+            ax[col].scatter(mm_params[col][0][offset:], mm_params[col][1][offset:], marker='.', color='#D65215')
             
             if col == 0:
                 ax[col].set_ylabel(r"$\beta$")
@@ -668,6 +704,7 @@ class Analyze:
         
         
         fig.tight_layout()
+
         fig.savefig(f"./graphs/{self.out}_mubeta_LR.png", dpi=600, bbox_inches="tight")
     
         
@@ -767,7 +804,7 @@ class Analyze:
         
         
     @staticmethod
-    def plot_fit(ax, arr, N0, a, alpha, col='blue', frac=1, bins=500):
+    def plot_fit(ax, arr, N0, a, alpha, col='#2D58B8', frac=1, bins=500):
         sorted_arr = np.array(sorted(arr))
         #l_lim = sorted_arr[0]
         #u_lim = sorted_arr[-1]
@@ -788,7 +825,7 @@ class Analyze:
         #print(linreg)
 
         fig = plt.figure(figsize=(4,4))
-        plt.scatter(trim_n0, trim_a, marker='o', color='royalblue')
+        plt.scatter(trim_n0, trim_a, marker='o', color='#2D58B8')
         plt.plot([min(trim_n0), max(trim_n0)], 
                     [min(trim_n0)*linreg.slope + linreg.intercept, 
                     max(trim_n0)*linreg.slope + linreg.intercept], color='grey')
@@ -800,7 +837,7 @@ class Analyze:
             plt.annotate(x+xxx, (trim_n0[x]+0.00001, trim_a[x]+0.00003))
             
         #plt.hlines(xmin=min(trim_n0)-0.0001, xmax=max(trim_n0)+0.0001, y=0.02, linestyles='--')
-
+      
         fig.savefig(f'./graphs/{self.out}_params.png', bbox_inches='tight', dpi=600)
             
             
@@ -963,7 +1000,7 @@ class Analyze:
     ###########################################################
     
     
-   ############### VALIDATION #################################
+   ############### VALIDATION with BH procedure #############
     @staticmethod
     def get_val_data(row, pars):
         
@@ -1357,4 +1394,140 @@ class Analyze:
         return fdrs, fdp, tps
     
      ###########################################################
-                        
+
+       ############### VALIDATION with PeptideProphet ###########
+    @staticmethod
+    def peptideprophet_validation(interact_file, no_files, ref_peps):
+
+        length = 500000
+        pvs = -1*np.ones(length)
+        labels = np.zeros(length)
+        charges = np.zeros(length)
+        tevss = np.zeros(length)
+        k=0
+        new_seqs = deque()
+
+
+
+        d = pepxml.read(interact_file)
+
+        for el in d:
+        # if 'DECOY' in el['search_hit'][0]['proteins'][0]['protein']:
+        #     continue
+            if 'search_hit' in el.keys():
+                p_v = el['search_hit'][0]['analysis_result'][0]['peptideprophet_result']['probability']
+                spec = el['spectrum']
+                fval = el['search_hit'][0]['search_score']['expect']
+                fval = -0.02 * np.log(fval / 1000.)
+                pep = el['search_hit'][0]['peptide']
+                new_seq = pep.replace('I', 'X').replace('L', 'X')
+
+        
+                if new_seq in ref_peps:
+                    label = 1
+                else:
+                    label = 0
+
+                
+                    
+                pvs[k] = p_v
+                tevss[k] = fval
+                labels[k] = label
+                new_seqs.append(new_seq)
+                
+                k +=1
+            
+        
+
+        df = pd.DataFrame(np.array([pvs, tevss, labels]).T)
+        df.columns = ['PP_pval', 'TEV', 'label']
+        df = df[df['PP_pval'] != -1]
+        df['peptide'] = new_seqs
+        #df['spectrum'] = specs
+
+        df = df.sort_values('PP_pval', inplace=False, ascending=True)
+        df = df.reset_index(drop=True)
+        df.index += 1
+
+        tree = ET.parse(interact_file)
+        root = tree.getroot()
+
+        #index: FDR threshold
+        #34 0.001
+        #45 0.01
+        #47 0.02
+        #50 0.04
+        #51 0.05
+        #49 0.03
+
+        fdr_indices = [34, 40, 45, 46, 47, 48, 49, 50, 51]
+        thresholds = list(map(lambda x: float(root[0][0][int(no_files)][x].attrib['min_prob']), fdr_indices))
+
+        return df, thresholds
+    
+    def plot_peptideprophet_validation_results(self, synth_pep_list):
+
+        def replace_IL(pep):
+            return pep.replace('I', 'X').replace('L', 'X')
+
+        def get_stats(df, ths):
+            fdps = []
+            tps = []
+            for i in ths:
+                filtered = df[df['PP_pval'] >= i]
+                fdps.append(len(filtered[filtered.label==0])/len(filtered))
+                tps.append(len(set(filtered[filtered.label==1]["peptide"].values)))
+                
+            return fdps, tps
+
+        peps = pd.read_csv(synth_pep_list, header=None)
+        fdrs = [0.001, 0.005, 0.01, 0.015, 0.02, 0.025, 0.03, 0.04, 0.05]
+        colors = ["royalblue", "orange", "green"]
+        styles = ["-", "--", "-."]
+        fig, ax = plt.subplots(1,2, figsize=(7, 3.5))
+        ax[0].plot([0, 0.05], [0, 0.05], color="grey")
+
+        for idx, name_id in enumerate(["26", "36", "42"]):
+            print(f"this is {name_id}...")
+
+            ref_peps = set(peps[peps[0].str.contains(f"first_pool_{name_id}")][1].values)
+            x_peps = list(map(lambda x: replace_IL(x), ref_peps))
+
+            print("this is td param")
+            df, ths = self.peptideprophet_validation(f"/data/dominik/pp_cdd_validation/interact-{name_id}_td_raw_par.pep.xml", 1, x_peps)
+            fdps, tps = get_stats(df, ths)
+            #ax[0].scatter(fdrs,fdps, color=colors[1])
+            ax[0].plot(fdrs, fdps, color=colors[1], linestyle=styles[idx])
+            #ax[1].scatter(fdrs,tps, color=colors[1])
+            ax[1].plot(fdrs, tps, color=colors[1], linestyle=styles[idx])
+
+            print("this is td nonparam")
+            df, ths = self.peptideprophet_validation(f"/data/dominik/pp_cdd_validation/interact-{name_id}_td.pep.xml", 1, x_peps)
+            fdps, tps = get_stats(df, ths)
+            #ax[0].scatter(fdrs,fdps, color=colors[2])
+            ax[0].plot(fdrs, fdps, color=colors[2], linestyle=styles[idx])
+            #ax[1].scatter(fdrs,tps, color=colors[2])
+            ax[1].plot(fdrs, tps, color=colors[2], linestyle=styles[idx])
+
+            print("this is cdd")
+            df, ths = self.peptideprophet_validation(f"/data/dominik/pp_cdd_validation/interact-cdd_{name_id}.pep.xml", 1, x_peps)
+            fdps, tps = get_stats(df, ths)
+            #ax[0].scatter(fdrs,fdps, color=colors[0])
+            ax[0].plot(fdrs, fdps, color=colors[0], linestyle=styles[idx])
+            #ax[1].scatter(fdrs,tps, color=colors[0])
+            ax[1].plot(fdrs, tps, color=colors[0], linestyle=styles[idx])
+
+
+        ax[0].set_xlabel("FDR threshold")
+        ax[0].set_ylabel("FDP")
+        ax[1].set_xlabel("FDR threshold")
+        ax[1].set_ylabel("number of peptides identified")
+
+        fig.tight_layout()
+
+        plt.savefig("peptideprophet_validation.png", dpi=600)
+
+
+
+
+                            
