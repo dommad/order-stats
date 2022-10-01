@@ -153,14 +153,10 @@ class Tools:
     def second_moment(data):
         f = lambda x: x**2
         squared = list(map(f, data))
-<<<<<<< HEAD
         length = len(data)
         if length == 0: length = 1
 
         return (1/length)*np.sum(squared)
-=======
-        return (1/len(data))*np.sum(squared)
->>>>>>> ddcb46ad03ffcc68743ff4d91089f03084867c02
     
     @staticmethod
     def sum_squared(k):
