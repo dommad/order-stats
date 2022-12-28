@@ -41,7 +41,7 @@ class Analyze:
     
     """
 
-    def __init__(self, outname, top_n=20, bic_cutoff=0.17):
+    def __init__(self, outname, top_n=30, bic_cutoff=0.17):
         self.params_est = []
         self.out = outname
         self.len_correct = 0
@@ -88,7 +88,7 @@ class Analyze:
 
         self.__export_pars_to_txt(param_outname)
 
-        return self.params_est, mle_pars, mm_pars
+        return self.params_est, mle_pars, mm_pars, tevs, charges
 
 
     def __export_pars_to_txt(self, pars_outname):
@@ -157,7 +157,7 @@ class Analyze:
             bics = []
             mode_params.append(self.__get_modes(mle_params[ch_idx]))
             mode_params.append(self.__get_modes(mm_params[ch_idx]))
-            tmp_params = [] # up to 7+ charge
+            tmp_params = []
 
             for mode in mode_params:
                 tmp_params, bics = self.__get_bics_data(top_hit, mode, tmp_params, bics)
@@ -480,93 +480,113 @@ class Analyze:
      
         fig.savefig(f"./graphs/{self.out}_top_models.png", dpi=600, bbox_inches="tight")
         return params
-    
-    
-    
+
+
     def __bic_diff(self, data, k, order, mle_p, mm_p):
         """calculate difference between BIC for MLE and MM models"""
         bic_mm = self.__get_bic(data, k, order, mm_p)
         bic_mle = self.__get_bic(data, k, order, mle_p)
-        #print(f"bic mm is {bic_mm} and bic mle is {bic_mle}")
-        #print(f"difference mle - mm is {bic_mle-bic_mm}")
         return 100*(bic_mm-bic_mle)/abs(bic_mle)
 
-  
+
     def __plot_lower_models(self, tevs, mle_par, mm_par, idx):
         """plot models of lower order distributions"""
-        # TODO: divide into smaller chunks
 
-        def kde_plots(ax_plot, axes, pars, hit, color):
-            mu, beta = pars
-            kde = lows.pdf_mubeta(axes, mu, beta, hit)
-            ax_plot.plot(axes, kde, color=color)
-            # df = pd.DataFrame(data = np.array([axes, kde]).T)
-            # df.to_csv(f"scores_{hit}_{idx}.csv",sep="\t")
+        no_hits = len(tevs[0][0,:])
+        n_row = int(np.ceil(np.sqrt(no_hits)))
+        n_col = int(np.ceil(no_hits/n_row))
 
-        def extract_pars(pars, hit):
-            return pars[0][hit], pars[1][hit]
+        fig, axs = plt.subplots(n_row, n_col, figsize=(n_row*2, n_col*2), constrained_layout=True)
 
-        fig, ax = plt.subplots(3,3, figsize=(6,6), constrained_layout=True)
-        hit = 1
         charge = idx-2
-        
-        bic_diffs = np.zeros(9)
-        
-        for row in range(3):
-            for col in range(3):
-                
-                data = tevs[charge][:,hit]
-                axes, kde_org = FFTKDE(bw=0.0005, kernel='gaussian').fit(data).evaluate(2**8)
-                ax[row%3, col].plot(axes, kde_org, color='#2D58B8')
-                
-                mle_pars = extract_pars(mle_par[charge], hit)
-                mm_pars = extract_pars(mm_par[charge], hit)
-                #print(f"MLE params: {mle_mu, mle_beta}, MM: {mm_mu, mm_beta}")
-                
-                kde_plots(ax[row%3, col], axes, mle_pars, hit, color='#D65215')
-                kde_plots(ax[row%3, col], axes, mm_pars, hit, color='#2CB199')
+        bic_diffs = []
 
-                ax[row%3, col].set_ylim(0,)
-                
-                #print(f"this is charge {charge}, hit {hit}")
-                bic_diffs[hit-1] = self.__bic_diff(data, k=2, order=hit, mle_p=mle_pars, mm_p=mm_pars)
-                
-                if col == 0:
-                    ax[row%3, col].set_ylabel("density")
-                if row == 2:
-                    ax[row%3, col].set_xlabel("TEV")
-                    
-                #ax[row%3, col].set_xlim(0, 0.4)
-                hit += 1
+        for hit in range(no_hits-1):
 
-        fig.savefig(f"./graphs/{self.out}_lower_models_{idx}.png", dpi=600, bbox_inches="tight")
+            cur_bic = self.__calculate_and_plot(tevs, charge, hit, n_col, axs, mle_par, mm_par)
+            bic_diffs.append(cur_bic)
 
-        #plot BIC relative differences
-        fig, ax = plt.subplots(figsize=(6,3), constrained_layout=True)
-        support = np.arange(9) + 2
-        ax.scatter(support, bic_diffs, color='#2D58B8')
-        ax.plot(support, bic_diffs, color='#2D58B8')
-        ax.set_xlabel("order")
-        ax.set_ylabel("relative BIC difference [%]")
+        self.__add_axis_labels(axs, n_col, n_row)
+
+        fig.savefig(f"./graphs/{self.out}_lower_models_{idx-2}.png", dpi=600, bbox_inches="tight")
+
+        self.__plot_bics(bic_diffs, idx-2)
+
+
+    def __calculate_and_plot(self, tevs, charge, hit, n_cols, axs, mle_par, mm_par):
+        """break down the code"""
+        data = tevs[charge][:,hit+1]
+        kde_sup, kde_org = self.__get_kde_density(data)
+        row, col = divmod(hit, n_cols)
+
+        axs[row, col].plot(kde_sup, kde_org, color='#2D58B8')
+
+        mle_pars = self.__extract_pars(mle_par[charge], hit)
+        mm_pars = self.__extract_pars(mm_par[charge], hit)
+
+        self.__kde_plots(axs[row, col], kde_sup, mle_pars, hit+1, color='#D65215')
+        self.__kde_plots(axs[row, col], kde_sup, mm_pars, hit+1, color='#2CB199')
+        axs[row, col].set_ylim(0,)
+
+        cur_bic_diff = self.__bic_diff(data, k=2, order=hit+1, mle_p=mle_pars, mm_p=mm_pars)
+
+        return cur_bic_diff
+
+    @staticmethod
+    def __add_axis_labels(axs, n_col, n_row):
+
+        for idx in range(n_col*n_row):
+            if idx % n_col == 0:
+                axs[divmod(idx, n_col)].set_ylabel("density")
+
+            if divmod(idx, n_col)[0] == n_row-1:
+                axs[divmod(idx, n_col)].set_xlabel("TEV")
+
+
+
+    @staticmethod
+    def __get_kde_density(data):
+        return FFTKDE(bw=0.0005, kernel='gaussian').fit(data).evaluate(2**8)
+
+
+    @staticmethod
+    def __kde_plots(ax_plot, kde_sup, pars, hit, color):
+        mu_, beta = pars
+        pdf_vals = lows.pdf_mubeta(kde_sup, mu_, beta, hit)
+        ax_plot.plot(kde_sup, pdf_vals, color=color)
+
+
+    @staticmethod
+    def __extract_pars(pars, hit):
+        return pars[0][hit], pars[1][hit]
+
+
+    def __plot_bics(self, bic_diffs, idx):
+        """plot BICs"""
+        support = np.arange(len(bic_diffs)) + 2
+        fig, axs = plt.subplots(figsize=(10, 5), constrained_layout=True)
+        axs.scatter(support, bic_diffs, color='#2D58B8')
+        axs.plot(support, bic_diffs, color='#2D58B8')
+        axs.set_xlabel("order")
+        axs.set_ylabel("relative BIC difference [%]")
         fig.savefig(f"./graphs/{self.out}_lower_models_BIC_{idx}.png", dpi=600, bbox_inches="tight")
-        
-        
-        
+
+
     @staticmethod    
     def __scatter_params(params, outname="example"):
-        
+
         x=3
         fig, ax = plt.subplots(figsize=(4,4))
 
-        for i in range(len(params)):
-            ax.scatter(params[i][0][x:], params[i][1][x:])
-        
+        for par_pair in params:
+            ax.scatter(par_pair[0][x:], par_pair[1][x:])
+
         ax.set_xlabel("mu")
         ax.set_ylabel("beta")
         ax.set_title("testing")
         ax.legend(['2+', '3+', '4+'])
         #fig.savefig(f'{outname}_params_scatter.png', dpi=400, bbox_inches='tight')
-        
+
 
     def __plot_lower_hist(self, tev, params, alpha):
         fig, ax = plt.subplots(3,3, figsize=(4,4))
@@ -698,7 +718,7 @@ class Analyze:
         
     
 
-    def __fast_parse(self, paths, option='Tide', top_n=20):
+    def __fast_parse(self, paths, option='Tide'):
         """fast parsing of pepXML results"""
 
         data = deque()
@@ -706,7 +726,7 @@ class Analyze:
         for path in paths:
             cur_file = pepxml.read(path)
             psms = filter(lambda x: 'search_hit' in x.keys(), cur_file)
-            has_top_n = filter(lambda x: len(x['search_hit']) == top_n, psms)
+            has_top_n = filter(lambda x: len(x['search_hit']) == self.top_n, psms)
 
             if option == 'Tide':
                 scores = list(map(self.__get_tide_data, has_top_n))
