@@ -1,105 +1,65 @@
 """Full analysis of pepxml file using lower order statistics"""
 import random
 from collections import deque
-import pickle
-import importlib as imp
 import functools as fu
-from xml.etree import ElementTree as ET
 import warnings
 import pandas as pd
 import matplotlib.pyplot as plt
 import scipy.stats as st
-from scipy.special import kolmogorov
 import numpy as np
 from pyteomics import pepxml, mzid
 from KDEpy import FFTKDE
 from sklearn.metrics import auc
 import order_formulae as of
-imp.reload(of)
-warnings.filterwarnings("ignore")
 
+warnings.filterwarnings("ignore")
 ofs = of.Tools()
-ems = of.EM()
+
+TH_N0 = 1000.
+TH_MU = 0.02*np.log(TH_N0)
+TH_BETA = 0.02
 
 class Analyze:
-    """
-    Analyze the results to get the top model parameters
+    """Execute FDR estimation using lower-order PSMs"""
 
-    ...
-
-    Attributes
-    ----------
-
-
-    Methods
-    -------
-
-    execute_estimation(self, file_paths, param_outname)
-        Executes parameter estimation for top models using
-        lower order statistics
-    """
-
-    def __init__(self, outname, top_n=30, bic_cutoff=0.17, lr_cutoff=(5,10)):
+    def __init__(self, outname, bic_cutoff=0.17, lr_cutoff=(5,10)):
         self.params_est = []
         self.out = outname
         self.len_correct = 0
-        self.top_n = top_n
         self.bic_cutoff = bic_cutoff
         self.tevs = []
         self.lr_cutoff = lr_cutoff
+        self.all_charges = [2,3,4]
 
 
-    def execute_estimation(self, files_paths, param_outname):
-        """Exectues parameter estimation for top model using lower
-        order statistics
+    def run_estimation(self, input_paths, pars_outname, mode='Tide', top_n=30):
+        """Estimate parameters of top null model using lower order TEV distributions"""
+        if mode in {'Tide', 'Comet'}:
+            self.tevs, charges = self.__parse_tide_comet(input_paths, top_n, mode)
+        elif mode == 'MSGF-tsv':
+            self.tevs, charges = self.__parse_msgf_tsv(input_paths[0])
+        elif mode == 'MSGF-mzid':
+            self.tevs, charges = self.__parse_msgf_mzid(input_paths[0])
 
-        Parameters
-        ----------
-        files_paths : list
-            List of paths of pep.xml files to use for parameter estimation
-        param_outname : str
-            Core name of all output files for the estimation process
-
-        Returns
-        -------
-        tuple
-            a tuple of estimated top model parameters, MLE, and MM estimates for lower-order models
-        """
-
-        #self.tevs, charges = self.fast_parse(files_paths)
-        self.tevs, charges = self.parse_msgf_data(files_paths[0])
-        #self.tevs, charges = self.get_msgf_mzid_data(files_paths[0])
-        all_charges = [2,3,4]
-
-        # for each charge, extract scores and estimate MLE/MM params
-        data = list(map(fu.partial(self.__get_mle_mm_pars, charges), all_charges))
+        data = list(map(fu.partial(self.__get_mle_mm_pars, charges), self.all_charges))
         self.tevs, mle_pars, mm_pars = list(zip(*data))
         mm_pars = np.nan_to_num(np.array(mm_pars))
 
-
-        #get the estimated parameters of top null models for each charge and plot the results
-        #self.__plot_orders(mle_pars, mm_pars)
-        output = self.__plot_mubeta(mle_pars, mm_pars)
+        _ = self.__plot_mubeta(mle_pars, mm_pars)
         self.__plot_mubeta_single(mle_pars, 'mle')
         self.__plot_mubeta_single(mm_pars, 'mm')
-        #self.lower_estimates = self.plot_top_models(tevs, mle_params, mm_params)
-        self.params_est = self.__alt_top_models(mle_pars, mm_pars, len(all_charges))
+        self.params_est = self.__alt_top_models(mle_pars, mm_pars, len(self.all_charges))
 
-        for charge in all_charges:
+        for charge in self.all_charges:
             idx = charge-2
             self.__plot_lower_models(mle_pars, mm_pars, idx)
 
-        self.__export_pars_to_txt(param_outname)
-
-        #output = self.__get_bootstrap_mle_mm_pars(2)
-
+        self.__export_pars_to_txt(pars_outname)
         return self.params_est, mle_pars, mm_pars, self.tevs, charges
-
 
 
     def __export_pars_to_txt(self, pars_outname):
         """export params to txt for modified PeptideProphet (mean & std)"""
-
         params = pd.DataFrame(self.params_est[1:])
         params[0] = params[0] + params[1]*np.euler_gamma
         params[1] = np.pi/np.sqrt(6)*params[1]
@@ -111,19 +71,20 @@ class Analyze:
         sel_scores = self.tevs[np.where(charges == sel_charge)[0]]
         if len(sel_scores) == 0:
             sel_scores = self.tevs[np.where(charges == 2)[0]]
-        mle_pars = tuple(self.__get_mle_params(sel_scores))
-        mm_pars = tuple(self.__get_mm_params(sel_scores, 3))
+        mle_pars = tuple(self.__get_mle_pars(sel_scores))
+        mm_pars = tuple(self.__get_mm_pars(sel_scores))
         return sel_scores, mle_pars, mm_pars
 
 
-    def __get_modes(self, pars, first_idx=4, last_beta_idx=-3):
+    def __get_lr_mean_beta(self, pars, first_idx=4, last_beta_idx=-3):
         """get linear regression parameters and mean beta for further processing"""
         mu_idx, beta_idx = [0,1]
         first_idx = self.lr_cutoff[0]
         linreg = st.linregress(pars[mu_idx][first_idx:],
                                 pars[beta_idx][first_idx:]) # drop first 3 points
-        mean_beta = np.mean(pars[1][last_beta_idx:]) # use last 3 data points
+        mean_beta = np.mean(pars[beta_idx][last_beta_idx:]) # use last 3 data points
         return linreg, mean_beta
+
 
     def __get_bic(self, data, k, order, params):
         """calculate BIC for lower section of the distribution"""
@@ -133,64 +94,55 @@ class Analyze:
         return bic
 
 
-    @staticmethod
-    def __get_beta_diff(data, order, params):
-        """calculate beta difference between best models and supplied value"""
-        _, best_beta = ofs.mle_mubeta(data, order)
-        #mu_diff = abs(best_mu-params[0])/best_mu
-        beta_diff = abs(best_beta - params[1])/best_beta
-        #print(params)
-        #if params negative ie not determined well, axe the case
-        #by assigning big beta difference
-        if params[1] < 0:
-            beta_diff = 10e6
-
-        return beta_diff
-
     def __get_alt_params(self, data, estim_mode):
         """generate LR and mean beta params for given data"""
         linreg, beta = estim_mode
-        lr_mu, lr_beta = self.__bic_optimization(data, linreg=linreg)
-        mean_mu, mean_beta = self.__bic_optimization(data, mean_beta=beta)
+        lr_mu, lr_beta = self.bic_optimize(data, linreg=linreg)
+        mean_mu, mean_beta = self.bic_optimize(data, mean_beta=beta)
         return lr_mu, lr_beta, mean_mu, mean_beta
 
 
-    def __alt_top_models(self, mle_params, mm_params, charge_no):
+    def __alt_top_models(self, mle_pars, mm_pars, charge_no):
         """estimate parameters of top models using lower order distributions"""
         fig, axes = plt.subplots(1, charge_no, figsize=(2*charge_no, 2))
-        params = np.zeros((10,2))
+        fin_pars = np.zeros((10,2))
+
+        # mode_dict  = {0: "MLE LR", 1: "MLE mean", 2: "MM LR", 3: "MM mean"}
 
         for ch_idx in range(charge_no):
 
             top_hit = self.tevs[ch_idx][:,0]
-            top_hit = top_hit[top_hit > 0.04] # dommad: don't count scores at 0 and below
-            mode_params = []
+            # top_hit = top_hit[top_hit > 0.04] # dommad: don't count scores at 0 and below
+            mode_pars = []
             bics = []
-            mode_params.append(self.__get_modes(mle_params[ch_idx]))
-            mode_params.append(self.__get_modes(mm_params[ch_idx]))
-            tmp_params = []
+            mode_pars.append(self.__get_lr_mean_beta(mle_pars[ch_idx]))
+            mode_pars.append(self.__get_lr_mean_beta(mm_pars[ch_idx]))
+            tmp_pars = []
 
-            for mode in mode_params:
-                tmp_params, bics = self.__get_bics_data(top_hit, mode, tmp_params, bics)
+            for mode in mode_pars:
+                tmp_pars, bics = self.__get_bics_data(top_hit, mode, tmp_pars, bics)
 
             best_idx = bics.index(min(bics))
-            _ = self.__find_pi(axes[ch_idx], top_hit, tmp_params[best_idx]) # for plotting
-            params[ch_idx+2,:] = tmp_params[best_idx]
+            # print(bics)
+            # print(f"best idx for charge {ch_idx+2} is {mode_dict[best_idx]}")
+            _ = self.__find_pi(axes[ch_idx], top_hit, tmp_pars[best_idx]) # for plotting
+            fin_pars[ch_idx+2,:] = tmp_pars[best_idx]
 
         fig.tight_layout()
         fig.savefig(f"./graphs/{self.out}_alt_top_models.png", dpi=600, bbox_inches="tight")
-        return params
+        return fin_pars
 
 
-    def __get_bics_data(self, top_hit, mode, tmp_params, bics):
+    def __get_bics_data(self, top_hit, mode, tmp_pars, bics):
         """obtain BICs and temporary parameters"""
         lr_mu, lr_beta, m_mu, m_beta = self.__get_alt_params(top_hit, mode)
+        print(lr_mu, lr_beta, m_mu, m_beta)
 
         bic_lr = 0.8*self.__get_bic(top_hit, 2, 0, [lr_mu, lr_beta])
         bic_m = self.__get_bic(top_hit, 2, 0, [m_mu, m_beta])
 
-        tmp_params.append([lr_mu, lr_beta])
-        tmp_params.append([m_mu, m_beta])
+        tmp_pars.append([lr_mu, lr_beta])
+        tmp_pars.append([m_mu, m_beta])
 
         if (lr_mu < 0) or (lr_beta < 0):
             bic_lr = 1e6
@@ -198,15 +150,14 @@ class Analyze:
         bics.append(bic_lr)
         bics.append(bic_m)
 
-        return tmp_params, bics
+        return tmp_pars, bics
 
 
-    @staticmethod
-    def __get_dec_pars(data):
+    def __get_dec_pars(self, data):
         pars = np.zeros((7,2))
         scores, chars = data
-        charges = [2,3,4]
-        for charge in charges:
+
+        for charge in self.all_charges:
             cur_mask = np.where(chars == charge)[0]
             cur_scores = scores[:,0][cur_mask]
             if len(cur_scores) < 100:
@@ -215,67 +166,44 @@ class Analyze:
             pars[charge,:] = st.gumbel_r.fit(cur_scores)
         return pars
 
-    def execute_validation(self, pepxml_file, reps=500, ext_params="", dec_paths=()):
+
+    def execute_validation(self, pepxml_f, top_n=10, reps=500, ext_params="", dec_paths=()):
         """read the pepxml, automatically add the p-values based on lower order estimates"""
 
         if ext_params != "":
             self.params_est = ext_params
-        #data = self.validation_df_random(pepxml_file, self.lower_estimates)
-        scores, charges, lower_pvs, coute_pvs, labels = self.__val_lower_params(pepxml_file, self.params_est)
-        #return scores, charges, lower_pvs, coute_pvs, labels
-        #decoy_params = self.__val_decoy_params(charges, labels, scores) #this is for BH decoy model
-        decoy_data = self.fast_parse(dec_paths)
-        decoy_params = self.__get_dec_pars(decoy_data)
-        #_, em_params_em = self.__val_em_params(charges, labels, scores, outname='em')
-        pi_0 = self.__get_bh_pi0(coute_pvs[np.where(labels != 4)])
-        print(pi_0)
-        cdd_params = pd.read_csv('/home/dominik/lower_order/review_1/cdd_params.txt', header=None).to_numpy()
 
-        #get decoy EM params
-        #_, em_params_dec = self.get_em_params(data, decoy_params, outname='dec')
+        scrs, chars, low_pvs, coute_pvs, lbls = self.__parse_get_pvals(pepxml_f, self.params_est)
+        dec_data = self.__parse_tide_comet(dec_paths, top_n)
 
-        #get lower EM params
-        #_, em_params_low = self.get_em_params(data, self.lower_estimates, outname='lower')
+        dec_pars = self.__get_dec_pars(dec_data)
+        cdd_pars = pd.read_csv('./cdd_params.txt', header=None).to_numpy()
 
-        decoy_pvs = self.faster_add_pvs(scores, charges, decoy_params)
-        cdd_pvs = self.faster_add_pvs(scores, charges, cdd_params)
-        #em_pvs = self.faster_add_pvs(scores, charges, em_params_em)
+        pi_0 = self.__get_pi0(coute_pvs[np.where(lbls != 4)])
 
-        #data = self.add_peps(data, em_params_low, colname='pep_low')
-        #data = self.add_peps(data, em_params_dec, colname='pep_dec')
-        #data = self.add_peps(data, em_params_em, colname='pep_em')
-        #return data
-
-        #conduct empirical bootstrap on all charges
-
-        chars = [2,3,4]
+        dec_pvs = self.__add_pvs(scrs, chars, dec_pars)
+        cdd_pvs = self.__add_pvs(scrs, chars, cdd_pars)
 
         all_boot_stats = deque()
-        idx_nondecoys = set(np.where(labels != 4)[0])
+        idx_non_dec = list(set(np.where(lbls != 4)[0]))
 
-        for charge in chars:
-            #prt(f"this is charge {charge}...")
+        cur_labels = lbls[idx_non_dec]
+        cur_lower = low_pvs[idx_non_dec]
+        cur_decoy = dec_pvs[idx_non_dec]
+        cur_cdd = cdd_pvs[idx_non_dec]
+        cur_coute = coute_pvs[idx_non_dec]
+        self.len_correct = len(cur_labels[cur_labels == 1])
 
-            #idx_charges = set(np.where(charges == charge)[0])
-            #idx_shared = list(set.intersection(idx_nondecoys, idx_charges))
-            idx_shared = list(idx_nondecoys)
-            cur_labels = labels[idx_shared]
-            cur_lower = lower_pvs[idx_shared]
-            cur_decoy = decoy_pvs[idx_shared]
-            cur_cdd = cdd_pvs[idx_shared]
-            cur_coute = coute_pvs[idx_shared]
-            self.len_correct = len(cur_labels[cur_labels == 1])
+        stats_low = self.__bootstrap(reps, cur_labels, cur_lower)
+        stats_dec = self.__bootstrap(reps, cur_labels, cur_decoy)
+        stats_cdd = self.__bootstrap(reps, cur_labels, cur_cdd)
+        stats_coute = self.__bootstrap(reps, cur_labels, cur_coute)
 
-            stats_low = self.__bootstrap_stats(reps, cur_labels, cur_lower)
-            stats_dec = self.__bootstrap_stats(reps, cur_labels, cur_decoy)
-            stats_cdd = self.__bootstrap_stats(reps, cur_labels, cur_cdd)
-            stats_coute = self.__bootstrap_stats(reps, cur_labels, cur_coute)
-
-            all_boot_stats.append([stats_low, stats_dec, stats_cdd, stats_coute])
+        all_boot_stats.append([stats_low, stats_dec, stats_cdd, stats_coute])
 
         fig, axs = plt.subplots(1, 2, figsize=(6,3))
-        self.__plot_bootstrap_stats(axs[0], all_boot_stats, pi_0)
-        self.__plot_bootstrap_tps(axs[1], all_boot_stats)
+        self.__plot_boot_fdrs(axs[0], all_boot_stats, pi_0)
+        self.__plot_boot_tps(axs[1], all_boot_stats)
         fig.tight_layout()
 
         fig.savefig(f"./graphs/{self.out}_validation.png", dpi=600, bbox_inches='tight')
@@ -283,17 +211,15 @@ class Analyze:
         return all_boot_stats
 
 
-    def __bootstrap_stats(self, reps, labels, pvs):
+    def __bootstrap(self, reps, labels, pvs):
         """calculate the consolidated stats"""
-
         bootstrap_data = self.__bootstrap_fdr(reps, labels, pvs, self.len_correct)
         bootstrap_data = np.array(bootstrap_data)
         stats = self.__val_stats(bootstrap_data, 0.32) # CI type: 68%
-
         return stats
 
 
-    def __val_stats(self, data, alpha): 
+    def __val_stats(self, data, alpha):
         """get FDP and TP stats for the tested FDR values"""
 
         length = len(data[0][0,:])
@@ -322,138 +248,69 @@ class Analyze:
 
         return master_mean, ci_l, ci_u
 
-    def __plot_bootstrap_stats(self, ax, all_stats, pi_0):
-        """plotting bootstrap results"""
+    def __plot_boot_fdrs(self, axs, all_stats, pi_0):
+        """plotting bootstrap FDP vs FDR"""
 
-        #fig, ax = plt.subplots(1, 3, figsize=(6, 2), constrained_layout=True)
-        cs = ['#2D58B8', '#D65215', '#2CB199', '#7600bc']
-        #pis = [1.67, 1.1, 1.1]
-
+        cs_ = ['#2D58B8', '#D65215', '#2CB199', '#7600bc']
 
         for method in range(len(all_stats[0])):
             fdrs = all_stats[0][method][0][0,:]
             fdps = all_stats[0][method][1]
             if method == 0:
-                self.__plot_fdp_fdr(ax, pi_0*fdrs, np.array(fdps), cs[method], xy=1)
+                self.__plot_fdr_stat(axs, pi_0*fdrs, np.array(fdps), cs_[method], xy_=1)
             else:
-                self.__plot_fdp_fdr(ax, pi_0*fdrs, np.array(fdps), cs[method])
+                self.__plot_fdr_stat(axs, pi_0*fdrs, np.array(fdps), cs_[method])
 
-        ax.set_xlabel("FDR")
-        ax.set_ylabel("FDP")
-            
-        #fig.tight_layout()
-        #fig.savefig(f"./graphs/{self.out}_fdr_fdp.png", dpi=600, bbox_inches='tight')
-        
-    def __plot_bootstrap_tps(self, ax, all_stats):
-        
-        #fig, ax = plt.subplots(1, 3, figsize=(6, 2), constrained_layout=True)
-        cs = ['#2D58B8', '#D65215', '#2CB199', '#7600bc']
-        
+        axs.set_xlabel("FDR")
+        axs.set_ylabel("FDP")
+
+
+    def __plot_boot_tps(self, axs, all_stats):
+        """plot boostrap # identified PSMs"""
+        cs_ = ['#2D58B8', '#D65215', '#2CB199', '#7600bc']
 
         for method in range(len(all_stats[0])):
             fdrs = all_stats[0][method][0][0,:]
             tps = all_stats[0][method][2]
             if method == 0:
-                self.__plot_fdp_fdr(ax, fdrs, tps, cs[method], axis_t="TPR")
+                self.__plot_fdr_stat(axs, fdrs, tps, cs_[method], axis_t="TPR")
             else:
-                self.__plot_fdp_fdr(ax, fdrs, tps, cs[method], axis_t="TPR")
+                self.__plot_fdr_stat(axs, fdrs, tps, cs_[method], axis_t="TPR")
 
-        ax.set_xlabel("FDR")
-        ax.set_ylabel("TPR")
-                           
-        #fig.tight_layout()
-        #fig.savefig(f"./graphs/{self.out}_fdr_tpr.png", dpi=600, bbox_inches='tight')
-        
-        
+        axs.set_xlabel("FDR")
+        axs.set_ylabel("Correctly identified PSMs")
+        axs.set_ylim(0,17000)
+
+
     #plot the FDP vs FDR results of validation
     @staticmethod
-    def __plot_fdp_fdr(ax, fdrs, fdp_stats, col, xy=False, axis_t='FDP'):
+    def __plot_fdr_stat(axs, fdrs, fdp_stats, col, xy_=False, axis_t='FDP'):
         """plot FDP vs FDR - results of validation"""
         #fdrs = np.linspace(0.0001, 0.1, 100)
 
-        if xy:
-            ax.plot([0.0001,0.1], [0.0001, 0.1], c='gray')
-        
-        #print(fdp_stats)
-        
-        ax.plot(fdrs, fdp_stats[0,:], color=col, linewidth=2)
-        ax.fill_between(fdrs, fdp_stats[0,:], fdp_stats[2,:], alpha=0.2, color=col)
-        ax.fill_between(fdrs, fdp_stats[0,:], fdp_stats[1,:], alpha=0.2, color=col)
-        
-        #ax.plot(fdrs, fdp_stats[2,:], alpha=0.5, color=col, linestyle='-', linewidth=1)
-        #ax.plot(fdrs, fdp_stats[1,:], alpha=0.5, color=col, linestyle='-', linewidth=1)
-        
+        if xy_:
+            axs.plot([0.0001,0.1], [0.0001, 0.1], c='gray')
+
+        axs.plot(fdrs, fdp_stats[0,:], color=col, linewidth=2)
+        axs.fill_between(fdrs, fdp_stats[0,:], fdp_stats[2,:], alpha=0.2, color=col)
+        axs.fill_between(fdrs, fdp_stats[0,:], fdp_stats[1,:], alpha=0.2, color=col)
+
+
         if axis_t == 'TPR':
-            ax.set_xlim(-0.001, 0.1)
-            ax.set_ylim(-0.01,)
-            
-        else:        
-            ax.set_xlim(-0.001, 0.1+0.001)
-            ax.set_ylim(-0.001, 0.1+0.001)
-            
-        #ax.set_xlabel("FDR")
-        #ax.set_ylabel(axis_t)
+            axs.set_xlim(-0.001, 0.1)
+            axs.set_ylim(-0.01,)
+        else:
+            axs.set_xlim(-0.001, 0.1+0.001)
+            axs.set_ylim(-0.001, 0.1+0.001)
 
 
-
-
-    @staticmethod
-    def __val_decoy_params(charges, labels, scores):
-        """obtain parameters from decoy PSMs"""
-        ch_idx = np.arange(7) + 1
-        params = np.zeros((10,2))
-        idx_labels = set(np.where(labels == 4)[0])
-
-        for charge in ch_idx:
-            idx_charges = set(np.where(charges == charge)[0])
-            idx_shared = list(set.intersection(idx_charges, idx_labels))
-            #idx_shared = list(idx_labels)
-            cur_scores = scores[idx_shared]
-
-            if len(cur_scores) != 0:
-                params[charge, :] = ofs.mle_mubeta(cur_scores, 0)
-        return params
-
-
-    def __val_em_params(self, charges, labels, scores, fixed_pars=(), outname="em"):
-        """get parameters from EM-based PSMs"""
-        stats = np.zeros((10,5))
-        null_params = np.zeros((10,2))
-        
-        chars = [2,3,4]
-        fig, axs = plt.subplots(1, 3, figsize=(6, 2))
-        idx_labels = set(np.where(labels != 4)[0])
-        
-        for idx, charge in enumerate(chars):
-            
-            idx_charges = set(np.where(charges == charge)[0])
-            idx_shared = list(set.intersection(idx_charges, idx_labels))
-            cur_scores = scores[idx_shared]
-            
-            #cur_tevs = df[(df.charge == ch) & (df.label != 4)]['tev'].to_numpy()
-            if fixed_pars == ():
-                params_em = ems.em_algorithm(cur_scores)
-            else:
-                params_em = ems.em_algorithm(cur_scores, fixed_pars[charge])
-                
-            ems.plot_em(axs[idx], cur_scores, params_em)
-            stats[charge,:] = params_em
-            null_params[charge,:] = params_em[:2]
-            
-        fig.tight_layout()
-       
-        fig.savefig(f"./graphs/{self.out}_EM_{outname}.png", dpi=600, bbox_inches='tight')
-    
-        return null_params, stats
-
-
-    def __find_pi(self, ax_plot, data, params, plot=True):
+    def __find_pi(self, axs, data, pars, plot=True):
         """find pi0 estimates for plotting the final models"""
-        mu, beta = params
+        mu_, beta = pars
         axes, kde = FFTKDE(bw=0.0005, kernel='gaussian').fit(data).evaluate(2**8)
         kde = kde/auc(axes, kde)
         trunk = len(axes[axes < self.bic_cutoff])
-        theory = ofs.pdf_mubeta(axes, mu, beta, 0)
+        theory = ofs.pdf_mubeta(axes, mu_, beta, 0)
         err = 1000
         best_pi = 0
 
@@ -464,57 +321,19 @@ class Analyze:
                 err = new_err
 
         if plot:
-            ax_plot.fill_between(axes, kde, alpha=0.2, color='#2CB199')
-            ax_plot.plot(axes, kde, color='#2CB199')
-            ax_plot.plot(axes, best_pi*theory, color='#D65215', linestyle='-')
-            ax_plot.set_xlim(0.0, 0.6)
-            ax_plot.set_ylim(0,20)
-            ax_plot.set_xlabel("TEV")
-            ax_plot.set_ylabel("density")
+            axs.fill_between(axes, kde, alpha=0.2, color='#2CB199')
+            axs.plot(axes, kde, color='#2CB199')
+            axs.plot(axes, best_pi*theory, color='#D65215', linestyle='-')
+            axs.set_xlim(0.0, 0.6)
+            axs.set_ylim(0,20)
+            axs.set_xlabel("TEV")
+            axs.set_ylabel("density")
 
         return best_pi
 
-    def __plot_top_models(self, tevs, mle_params, mm_params):
-        
-        def shift(arr, idx):
-            return np.sign(arr[idx] - arr[idx+1])
-        
-        fig, ax = plt.subplots(1,3,figsize=(6, 2), constrained_layout=True)
-        params = np.zeros((10,2))
-        
-        
-        for order in range(3):
-            top_hit = tevs[order][:,0]
-            if mle_params[order][2].rvalue > 0.99 and np.mean(list(map(lambda x: shift(mle_params[order][0], x), range(9)))) < 0:
-                #print(f"{order}, 'MLE'")
-                best_mu, best_beta = self.__bic_optimization(top_hit, linreg=mle_params[order][2])
-
-                if (best_mu < 0) or (best_beta < 0):
-                    best_mu, best_beta = self.__bic_optimization(top_hit, mean_beta=np.mean(mm_params[order][1][-3:]))
-
-            else:
-                """
-                mm_lr = st.linregress(mm_params[order][0][3:], mm_params[order][1][3:])
-                print(mm_lr)
-                if abs(mm_lr.rvalue) >= 0.99:
-                    print("MM LR")
-                    best_mu, best_beta = qq_lr(top_hit, mm_lr)
-                if abs(mm_lr.rvalue) < 0.99:"""
-                print(f"{order}, 'MM'")
-                best_mu, best_beta = self.__bic_optimization(top_hit, mean_beta=np.mean(mm_params[order][1][-3:]))
-                    
-            _ = self.__find_pi(ax[order], top_hit, (best_mu, best_beta))
-            params[order+2,:] = [best_mu, best_beta]
-            #print(best_mu, best_beta, best_pi)
-            
-        #fig.tight_layout()
-     
-        fig.savefig(f"./graphs/{self.out}_top_models.png", dpi=600, bbox_inches="tight")
-        return params
-
 
     def compare_density_auc(self, data, params, hit, idx):
-        """Compare densities"""
+        """Compare theoretical and empirical densities"""
         mle_pars = self.__extract_pars(params[idx], hit)
         mu_, beta = mle_pars
         axes, kde = FFTKDE(bw=0.0005, kernel='gaussian').fit(data).evaluate(2**8)
@@ -524,27 +343,46 @@ class Analyze:
         return abs(theory_auc - kde_auc)/kde_auc
 
 
-    def __plot_lower_models(self, mle_par, mm_par, charge):
+    def __plot_lower_models(self, mle_par, mm_par, idx):
         """plot models of lower order distributions"""
 
-        idx = charge -2
+        #idx = charge -2
         bic_diffs = []
         n_row = 3
         n_col = 3
 
-        fig, axs = plt.subplots(n_row, n_col, figsize=(n_row*2, n_col*2), constrained_layout=True)
-        hit = 1
+        fig1, ax1 = plt.subplots(n_row, n_col, figsize=(n_row*2, n_col*2), constrained_layout=True)
+        fig2, ax2 = plt.subplots(n_row, n_col, figsize=(n_row*2, n_col*2), constrained_layout=True)
+        hit = 0
         for row in range(3):
             for col in range(3):
-                cur_bic = self.__add_lower_plot(idx, hit, axs[row, col], mle_par, mm_par)
+                cur_bic = self.__add_lower_plot(idx, hit, ax1[row, col], mle_par, mm_par)
+                self.__add_pp_plot(idx, hit, ax2[row, col], [mle_par, mm_par])
                 #cur_bic = self.compare_density_auc(self.tevs[idx][:,hit], mle_par, hit, idx)
                 bic_diffs.append(cur_bic)
                 hit += 1
 
-        self.__add_axis_labels(axs, n_col, n_row)
-        fig.savefig(f"./graphs/{self.out}_lower_models_{idx}.png", dpi=600, bbox_inches="tight")
+        self.__add_axis_labels(ax1, n_col, n_row, mode='density')
+        self.__add_axis_labels(ax2, n_col, n_row, mode='PP')
+        fig1.savefig(f"./graphs/{self.out}_lower_models_{idx}.png", dpi=600, bbox_inches="tight")
+        fig2.savefig(f"./graphs/{self.out}_pp_plots_{idx}.png", dpi=600, bbox_inches="tight")
 
         self.__plot_bics(bic_diffs, idx)
+
+    def __add_pp_plot(self, idx, hit, axs, pars_list):
+        """break down the code"""
+        data = sorted(self.tevs[idx][:, hit+1])
+
+        mle_par, mm_par = pars_list
+        mle_pars = self.__extract_pars(mle_par[idx], hit)
+        mm_pars = self.__extract_pars(mm_par[idx], hit)
+
+        mm_qq = ofs.universal_cdf(data, mm_pars[0], mm_pars[1], hit+1)
+        mle_qq = ofs.universal_cdf(data, mle_pars[0], mle_pars[1], hit+1)
+        emp_qq = np.arange(1, len(data)+1)/len(data)
+        axs.scatter(mle_qq, emp_qq, color='#D65215', s=1)
+        axs.scatter(mm_qq, emp_qq, color='#2CB199', s=1)
+        axs.plot([0,1], [0,1], color='k')
 
 
     def __add_lower_plot(self, idx, hit, axs, mle_par, mm_par):
@@ -561,20 +399,19 @@ class Analyze:
         mm_pars = self.__extract_pars(mm_par[idx], hit)
 
         self.__kde_plots(axs, kde_sup, mle_pars, hit+1, color='#D65215')
-        #self.__kde_plots(axs[coords], kde_sup, mm_pars, hit+1, color='#2CB199')
+        self.__kde_plots(axs, kde_sup, mm_pars, hit+1, color='#2CB199')
         axs.set_ylim(0,)
 
         cur_bic_diff = self.__bic_diff(idx, k=2, order=hit+1, params=[mle_pars, mm_pars])
-
         return cur_bic_diff
 
     def __bic_diff(self, idx, k, order, params):
         """calculate difference between BIC for MLE and MM models"""
         mle_p, mm_p = params
         data = self.tevs[idx][:, order]
-        bic_mm = self.__get_bic(data, k, order, mm_p)
+        _ = self.__get_bic(data, k, order, mm_p)
         bic_mle = self.__get_bic(data, k, order, mle_p)
-        #return 100*(bic_mm-bic_mle)/abs(bic_mle)
+        # return 100*(bic_mm-bic_mle)/abs(bic_mle)
         return bic_mle
 
 
@@ -588,17 +425,22 @@ class Analyze:
         return kde_sup, kde_den
 
 
-
     @staticmethod
-    def __add_axis_labels(axs, n_col, n_row):
+    def __add_axis_labels(axs, n_col, n_row, mode='density'):
+
+        if mode == 'density':
+            ylab = 'density'
+            xlab = 'TEV'
+        elif mode == 'PP':
+            ylab = 'empirical CDF'
+            xlab = 'theoretical CDF'
 
         for idx in range(n_col*n_row):
             if idx % n_col == 0:
-                axs[divmod(idx, n_col)].set_ylabel("density")
+                axs[divmod(idx, n_col)].set_ylabel(ylab)
 
             if divmod(idx, n_col)[0] == n_row-1:
-                axs[divmod(idx, n_col)].set_xlabel("TEV")
-
+                axs[divmod(idx, n_col)].set_xlabel(xlab)
 
 
     @staticmethod
@@ -629,193 +471,98 @@ class Analyze:
         fig.savefig(f"./graphs/{self.out}_lower_models_BIC_{idx}.png", dpi=600, bbox_inches="tight")
 
 
-    @staticmethod    
-    def __scatter_params(params, outname="example"):
+    def __plot_mubeta_single(self, pars, outn='mle'):
 
-        x=3
-        fig, ax = plt.subplots(figsize=(4,4))
-
-        for par_pair in params:
-            ax.scatter(par_pair[0][x:], par_pair[1][x:])
-
-        ax.set_xlabel("mu")
-        ax.set_ylabel("beta")
-        ax.set_title("testing")
-        ax.legend(['2+', '3+', '4+'])
-        #fig.savefig(f'{outname}_params_scatter.png', dpi=400, bbox_inches='tight')
-
-
-    def __plot_lower_hist(self, tev, params, alpha):
-        fig, ax = plt.subplots(3,3, figsize=(4,4))
-        sss =1
-        for row in range(3):
-            for col in range(3):
-                self.__plot_fit(ax[row%3, col], tev[alpha][:,sss], params[alpha][0][sss], params[alpha][1][sss], sss, col='#2D58B8', frac=1, bins=500)
-                sss += 1
-        #fig.savefig('yeast_3Da_1Da_f_lowerhits.png', dpi=400, bbox_inches='tight')
-
-
-    def __plot_orders(self, mle_params, mm_params):
-        no_orders = 10
-        fig, ax = plt.subplots(2,3, figsize=(6,3), constrained_layout=True)
-        cs = ['#2D58B8', '#D65215', '#2CB199']
-        print(mle_params)
-        print(mm_params)
-    
-        for row in range(2):
-            for col in range(3):
-
-                ax[row, col].scatter(np.arange(no_orders)+1, mle_params[col][row], marker='.')
-                ax[row, col].scatter(np.arange(no_orders)+1, mm_params[col][row], marker='.')
-                ax[row, col].set_xticks(np.arange(10)+1)
-                if row == 0:
-                    ax[row, col].set_ylabel(r"$\mu$")
-                else:
-                    ax[row, col].set_ylabel(r"$\beta$")
-                
-                if row == 1:
-                    ax[row, col].set_xlabel("order")
-        
-        #fig.tight_layout()
-        fig.savefig(f"./graphs/{self.out}_mle_mm_params.png", dpi=600, bbox_inches="tight")
-
-    
-    def __plot_mubeta_single(self, pars, outname='mle'):
-
-        fig, ax = plt.subplots(1,3, figsize=(9,3))
+        fig, axs = plt.subplots(1,3, figsize=(9,3))
         l_lim, u_lim = self.lr_cutoff
-    
+        cs_ = ['#2D58B8', '#D65215']
+
         for row in range(3):
-            mle_c = '#2D58B8'
-            mm_c = '#D65215'
             mle_x, mle_y = pars[row][0][l_lim:u_lim], pars[row][1][l_lim:u_lim]
 
-            ax[row].scatter(mle_x, mle_y, color=mle_c, marker='o', edgecolors='k',linewidths=0.5)
+            axs[row].scatter(mle_x, mle_y, color=cs_[0], marker='o', edgecolors='k',linewidths=0.5)
             linreg = st.linregress(mle_x, mle_y)
-            lr_x = np.array([min(0.138, min(mle_x)), max(mle_x)])
-            ax[row].plot(lr_x, lr_x*linreg.slope + linreg.intercept)
-            ax[row].scatter([0.138], [0.02], color='orange')
-            ax[row].set_title(f"pvalue = {linreg.pvalue}")
+            lr_x = np.array([min(TH_MU, min(mle_x)), max(mle_x)])
+            axs[row].plot(lr_x, lr_x*linreg.slope + linreg.intercept)
+            axs[row].scatter([TH_MU], [TH_BETA], color='orange')
+            #axs[row].set_title(f"pvalue = {linreg.pvalue}")
+            #self.__annotation(ax[row], mle_x, mle_y, cs_[0])
+            axs[row].set_xlabel(r"$\mu$")
+            axs[row].set_ylabel(r"$\beta$")
 
-            #self.__annotation(ax[row], mle_x, mle_y, mle_c)
-
-            ax[row].set_xlabel(r"$\mu$")
-            ax[row].set_ylabel(r"$\beta$")
-              
-        
         fig.tight_layout()
-        fig.savefig(f"./graphs/{outname}_mubeta_params_single.png", dpi=600, bbox_inches="tight")
+        fig.savefig(f"./graphs/{self.out}_{outn}_mubeta_params.png", dpi=600, bbox_inches="tight")
 
 
-    
     def __plot_mubeta(self, mle_params, mm_params):
-        no_orders = 10
-        fig, ax = plt.subplots(1,3, figsize=(9,3))
-    
+        """plot mu-beta plots"""
+        fig, axs = plt.subplots(1,3, figsize=(9,3))
+
         for row in range(3):
             mle_c = '#2D58B8'
             mm_c = '#D65215'
             mle_x, mle_y = mle_params[row][0][3:], mle_params[row][1][3:]
             mm_x, mm_y = mm_params[row][0][3:], mm_params[row][1][3:]
 
-            ax[row].scatter(mle_x, mle_y, color=mle_c, marker='o', edgecolors='k',linewidths=0.5)
-            ax[row].scatter(mm_x, mm_y, color=mm_c, marker='o', edgecolors='k',linewidths=0.5)
+            axs[row].scatter(mle_x, mle_y, color=mle_c, marker='o', edgecolors='k',linewidths=0.5)
+            axs[row].scatter(mm_x, mm_y, color=mm_c, marker='o', edgecolors='k',linewidths=0.5)
 
-            #print(f"charge {row+2}, MLE params")
-            self.__annotation(ax[row], mle_x, mle_y, mle_c)
-            #print(f"charge {row+2}, MM params")
-            self.__annotation(ax[row], mm_x, mm_y, mm_c)
+            self.__annotation(axs[row], mle_x, mle_y, mle_c)
+            self.__annotation(axs[row], mm_x, mm_y, mm_c)
 
-            ax[row].set_xlabel(r"$\mu$")
-            #if row == 0:
-            ax[row].set_ylabel(r"$\beta$")
-              
-        
+            axs[row].set_xlabel(r"$\mu$")
+            axs[row].set_ylabel(r"$\beta$")
+
         fig.tight_layout()
-        fig.savefig(f"./graphs/{self.out}_mubeta_params_numbered.png", dpi=600, bbox_inches="tight")
+        fig.savefig(f"./graphs/{self.out}_mubeta_params_numbered.png", dpi=600)
 
-        fig, ax = plt.subplots(1,3, figsize=(9,3))
-    
+        fig, axs = plt.subplots(1,3, figsize=(9,3))
+
         for row in range(3):
             mle_c = '#2D58B8'
             mm_c = '#D65215'
             mle_x, mle_y = mle_params[row][0][3:], mle_params[row][1][3:]
             mm_x, mm_y = mm_params[row][0][3:], mm_params[row][1][3:]
 
-            #mle_lr = st.linregress(mle_x, mle_y)
-            #mm_lr = st.linregress(mm_x, mm_y)
+            # mle_lr = st.linregress(mle_x, mle_y)
+            # mm_lr = st.linregress(mm_x, mm_y)
 
-            #ax[row].plot(mle_x[0]*mle_lr.slope + mle_lr.intercept, )
+            # ax[row].plot(mle_x[0]*mle_lr.slope + mle_lr.intercept, )
 
-            ax[row].scatter(mle_x, mle_y, color=mle_c, marker='o', edgecolors='k',linewidths=0.5)
-            ax[row].scatter(mm_x, mm_y, color=mm_c, marker='o', edgecolors='k',linewidths=0.5)
+            axs[row].scatter(mle_x, mle_y, color=mle_c, marker='o', edgecolors='k',linewidths=0.5)
+            axs[row].scatter(mm_x, mm_y, color=mm_c, marker='o', edgecolors='k',linewidths=0.5)
 
-            #self.annotation(ax[row], mle_x, mle_y, mle_c)
-            #self.annotation(ax[row], mm_x, mm_y, mm_c)
+            # self.annotation(ax[row], mle_x, mle_y, mle_c)
+            # self.annotation(ax[row], mm_x, mm_y, mm_c)
 
-            ax[row].set_xlabel(r"$\mu$")
-            #if row == 0:
-            ax[row].set_ylabel(r"$\beta$")
+            axs[row].set_xlabel(r"$\mu$")
+            # if row == 0:
+            axs[row].set_ylabel(r"$\beta$")
 
         fig.tight_layout()
-       
-        fig.savefig(f"./graphs/{self.out}_mubeta_params_clean.png", dpi=600, bbox_inches="tight")
+        fig.savefig(f"./graphs/{self.out}_mubeta_params_clean.png", dpi=600)
         return (mle_params, mm_params)
 
-    
-    def __annotation(self, ax, x, y, col):
+    def __annotation(self, axs, xs_, ys_, col):
 
         offset = 3
-        for idx, pair in enumerate(zip(x,y)):
-            ax.annotate(idx+offset, (pair[0], pair[1]-0.0002), color=col)
+        for idx, pair in enumerate(zip(xs_,ys_)):
+            axs.annotate(idx+offset, (pair[0], pair[1]-0.0002), color=col)
 
-        #plot linreg
-        #linreg = st.linregress(x, y)
-        #print(linreg.rvalue)
-        #xs = np.array([min(x), max(x)])
-        #ymin, ymax = linreg.slope*xs + linreg.intercept
-        #ax.plot(xs, [ymin, ymax], color=col)
-        #ax.set_title(f"{linreg.rvalue}_{linreg.pvalue}")
 
-        
-        
-    def __plot_mubeta_lr(self, mle_params, mm_params):
-        
-        fig, ax = plt.subplots(1,3, figsize=(6, 2))
-        offset = 2
-        
-        for col in range(3):
-            
-            ax[col].scatter(mle_params[col][0][offset:], mle_params[col][1][offset:], marker='.', color='#2D58B8')
-            ax[col].scatter(mm_params[col][0][offset:], mm_params[col][1][offset:], marker='.', color='#D65215')
-            
-            if col == 0:
-                ax[col].set_ylabel(r"$\beta$")
-                ax[col].set_xlabel(r"$\mu$")
-            else:
-                ax[col].set_xlabel(r"$\mu$")
-        
-        
-        fig.tight_layout()
-        fig.savefig(f"./graphs/{self.out}_mubeta_LR.png", dpi=600, bbox_inches="tight")
-    
-        
-    
-
-    def fast_parse(self, paths, option='Tide'):
-        """fast parsing of pepXML results"""
-
+    def __parse_tide_comet(self, paths, top_n, option='Tide'):
+        """fast parsing of pepXML results from Tide or Comet"""
         data = deque()
 
         for path in paths:
             cur_file = pepxml.read(path)
             psms = filter(lambda x: 'search_hit' in x.keys(), cur_file)
-            has_top_n = filter(lambda x: len(x['search_hit']) == self.top_n, psms)
+            has_top_n = filter(lambda x: len(x['search_hit']) == top_n, psms)
 
             if option == 'Tide':
-                scores = list(map(self.__get_tide_data, has_top_n))
+                scores = list(map(self.__get_tide_scores, has_top_n))
             elif option == 'Comet':
-                scores = list(map(self.__get_comet_data, has_top_n))
+                scores = list(map(self.__get_comet_scores, has_top_n))
 
             data += scores
 
@@ -824,7 +571,7 @@ class Analyze:
         return tevs, np.array(charges)
 
 
-    def __get_tide_data(self, spectrum):
+    def __get_tide_scores(self, spectrum):
         """extract TEV scores from Tide search results"""
         charge = spectrum['assumed_charge']
         scores = map(self.__get_tide_tev,
@@ -836,61 +583,58 @@ class Analyze:
         """convert Tide's p-value to TEV"""
         num_match = hit['num_matched_peptides']
         p_val = hit['search_score']['exact_pvalue']
-        return -0.02*np.log(max(p_val, 10e-16)*num_match/1000)
+        return -TH_BETA*np.log(max(p_val, 10e-16)*num_match/TH_N0)
 
     @staticmethod
-    def __get_comet_data(row):
+    def __get_comet_scores(row):
         """extract TEV scores from Comet search results"""
         scores = map(lambda x:
-                    -0.02*np.log(x['search_score']['expect']/1000),
+                    -TH_BETA*np.log(x['search_score']['expect']/TH_N0),
                     row['search_hit'])
         charge = row['assumed_charge']
         return list(scores), charge
 
 
-    def parse_msgf_data(self, input_path):
+    def __parse_msgf_tsv(self, input_path):
         """Parse MSGF+ search results"""
         data = pd.read_csv(input_path, sep='\t')
         scans = set(data.ScanNum)
-        tevs = list(map(fu.partial(self.msgf_scores, dat=data, no_hits=30), scans))
+        tevs = list(map(fu.partial(self.__get_msgf_tsv_tev, dat=data, no_hits=30), scans))
         charges = list(map(lambda x: data[data.ScanNum == x]['Charge'].values[0], scans))
         return np.array(tevs), np.array(charges)
 
     @staticmethod
-    def msgf_scores(scan, dat, no_hits):
+    def __get_msgf_tsv_tev(scan, dat, no_hits):
         """parse MSGF+ scores fast"""
         cur_scores = [0,]*no_hits
         cur_hits = set(dat[dat.ScanNum == scan]['EValue'])
         cur_hits = np.array(sorted(list(cur_hits)))
-        cur_hits = -0.02*np.log(cur_hits/1000)
+        cur_hits = -TH_BETA*np.log(cur_hits/TH_N0)
         if len(cur_hits) > no_hits:
             return cur_hits[:no_hits]
         cur_scores[:len(cur_hits)] = cur_hits
         return cur_scores
 
     @staticmethod
-    def get_msgf_mzid(spec):
-        """test"""
+    def __get_msgf_mzid_tev(spec):
+        """Extract TEVs from MSGF+ output (mzid)"""
         charge = spec['SpectrumIdentificationItem'][0]['chargeState']
-        tevs = list(map(lambda x: -0.02*np.log(x['MS-GF:EValue']/1000),
+        tevs = list(map(lambda x: -TH_BETA*np.log(x['MS-GF:EValue']/TH_N0),
                     spec['SpectrumIdentificationItem']))
         empty_tevs = np.zeros(30)
         max_lim = min(30,len(tevs))
         empty_tevs[:max_lim] = sorted(tevs, reverse=True)[:max_lim]
         return empty_tevs, charge
 
-    def get_msgf_mzid_data(self, input_path):
-        """test"""
+    def __parse_msgf_mzid(self, input_path):
+        """Extract MSGF+ scores (mzid)"""
         data = mzid.read(input_path)
-        results = list(map(self.get_msgf_mzid, data))
+        results = list(map(self.__get_msgf_mzid_tev, data))
         tevs = [x[0] for x in results]
         charges = [x[1] for x in results]
         return np.array(tevs), np.array(charges)
 
 
-
-
-    #1 objective 1: estimate parameters for each hit separately, then plot the linear regression
     @staticmethod
     def __find_mle_pars(scores):
         """estimate parameters using MLE"""
@@ -901,95 +645,49 @@ class Analyze:
         for hit in range(1, length): # skip first hit since it's a mixture
             cur_tev = scores[:, hit]
             cur_tev = cur_tev[cur_tev > 0.04]
-            #cur_tev = sorted(cur_tev)
-            le = len(cur_tev)
-            cur_tev = cur_tev[int(le*0.01):int(le*0.99)]
+            len_ = len(cur_tev)
+            cur_tev = cur_tev[int(len_*0.01):int(len_*0.99)]
             params[hit-1] = ofs.mle_mubeta(cur_tev, hit)
-            #mus.append(cur_mu)
-            #betas.append(cur_beta)
 
         return list(zip(*params))
 
 
-    @staticmethod
-    def __plot_fit(ax, arr, N0, a, alpha, col='#2D58B8', frac=1, bins=500):
-        sorted_arr = np.array(sorted(arr))
-        #l_lim = sorted_arr[0]
-        #u_lim = sorted_arr[-1]
-        pdf = ofs.pdf_mubeta(sorted_arr, N0, a, alpha)
-        ax.plot(sorted_arr, frac*pdf,color=col)
-        ax.hist(sorted_arr, bins = np.linspace(0, 0.8, bins), histtype='step', density=True)
-        median = np.median(sorted_arr)
-        ax.vlines(x=median, ymin=0, ymax=20)
-        #ax.set_xlim(l_lim, u_lim)
-        ax.set_xlim(0, 0.3)
-
-
-    def __plot_params(self, n0, a, xxx=0):
-
-        trim_n0 = list(n0)
-        trim_a = list(a)
-        linreg = st.linregress(trim_n0, trim_a)
-        #print(linreg)
-
-        fig = plt.figure(figsize=(4,4))
-        plt.scatter(trim_n0, trim_a, marker='o', color='#2D58B8')
-        plt.plot([min(trim_n0), max(trim_n0)], 
-                    [min(trim_n0)*linreg.slope + linreg.intercept, 
-                    max(trim_n0)*linreg.slope + linreg.intercept], color='grey')
-        plt.xlabel('mu')
-        plt.ylabel("beta")
-        plt.xlim(min(trim_n0)-0.001, max(trim_n0)+0.001)
-        
-        for x in range(len(trim_n0)):
-            plt.annotate(x+xxx, (trim_n0[x]+0.00001, trim_a[x]+0.00003))
-            
-        #plt.hlines(xmin=min(trim_n0)-0.0001, xmax=max(trim_n0)+0.0001, y=0.02, linestyles='--')
-      
-        fig.savefig(f'./graphs/{self.out}_params.png', bbox_inches='tight', dpi=600)
-            
-            
 ############### PARAMETER ESTIMATION ###################################
-            
-            
-    #obtain MLE parameters and their fitted linear regression mu vs. beta
-    def __get_mle_params(self, tevs):
 
-        mu, beta = self.__find_mle_pars(tevs)
+    def __get_mle_pars(self, tevs):
+        """Get mu and beta from MLE + linear regression"""
+        mu_, beta = self.__find_mle_pars(tevs)
         l_lim, u_lim = self.lr_cutoff
-        trim_n0 = mu[l_lim:u_lim]
+        trim_n0 = mu_[l_lim:u_lim]
         trim_a = beta[l_lim:u_lim]
         linreg = st.linregress(trim_n0, trim_a)
 
-        return mu, beta, linreg
+        return mu_, beta, linreg
 
-    #obtain method of moments parameters
-    def __get_mm_params(self, tev, start_idx):
-        m1 = []
-        m2 = []
+    def __get_mm_pars(self, tev):
+        """Get method of moments parameters"""
+        m_1 = []
+        m_2 = []
 
-        for order in range(len(tev[0,:])):
+        for order in range(1,len(tev[0,:])):
             cur_scores = tev[:, order]
             cur_scores = cur_scores[cur_scores > 0]
             cur_m1, cur_m2 = ofs.mm_estimator(cur_scores, order)
-            m1.append(cur_m1)
-            m2.append(cur_m2)
-        return m1, m2
-
-
-###########################################################
+            m_1.append(cur_m1)
+            m_2.append(cur_m2)
+        return m_1, m_2
 
 
 ################# BIC OPTIMIZATION ###################
 
-
-    def __bic_optimization(self, tev, **kwargs):
+    def bic_optimize(self, tev, **kwargs):
         """BIC optimization for linear regression mode parameters"""
         errors = []
-        mu_range = np.linspace(0.05, 0.4, 500)
+        mu_range = np.linspace(0.1, 0.2, 500)
 
         if 'linreg' in kwargs:
             linreg = kwargs['linreg']
+
             for cur_mu in mu_range:
                 cur_beta = cur_mu*linreg.slope + linreg.intercept
                 diffs = self.__get_bic(tev, 1, 0, [cur_mu, cur_beta])
@@ -1007,15 +705,16 @@ class Analyze:
         if 'linreg' in kwargs:
             opt_beta = opt_mu*linreg.slope + linreg.intercept
 
+        # fig, axs = plt.subplots()
+        # axs.plot(mu_range, errors)
+        # axs.scatter(opt_mu, min(errors), color='orange')
+
         return opt_mu, opt_beta
-
-    ###########################################################
-
 
    ############### VALIDATION with BH procedure #############
 
-    def __val_lower_params(self, paths, pars):
-
+    def __parse_get_pvals(self, paths, pars):
+        """Parse the data and get lower-order and Coute's p-vals at the same time"""
         pvs = deque()
         ground_truth = deque()
         charges = deque()
@@ -1037,20 +736,17 @@ class Analyze:
             sidaks += item[3]
             ground_truth += item[4]
 
-        #df = pd.DataFrame(np.array([pvs, ground_truth, charges, scores]).T)
-        #df.head()
-        #df.columns = ['pv_low', 'label', 'charge', 'tev']
         return np.array(scores), np.array(charges), np.array(pvs), np.array(sidaks), np.array(ground_truth)
 
-    @staticmethod
-    def __get_val_data(row, pars):
+
+    def __get_val_data(self, row, pars):
         num_match = row['search_hit'][0]['num_matched_peptides']
         p_val = row['search_hit'][0]['search_score']['exact_pvalue']
-        cur_tev = -0.02*np.log(max(p_val, 10e-16)*num_match/1000)
+        cur_tev = -TH_BETA*np.log(max(p_val, 10e-16)*num_match/TH_N0)
         sidak_pv = 1-pow(1-p_val, num_match)
         charge = int(row['assumed_charge'])
 
-        if charge not in [2,3,4]:
+        if charge not in self.all_charges:
             fin_pv = 1
         else:
             fin_pv = 1 - st.gumbel_r.cdf(cur_tev, pars[charge][0], pars[charge][1])
@@ -1077,135 +773,16 @@ class Analyze:
 
         return scores, charges, pvs, sidaks, lbl
         #return data, labels
-    
-
-    
-   
-    @staticmethod
-    def __validation_df_random(paths, pars):
-        
-        length = 500000
-        pvs = -1*np.ones(length)
-        labels = np.zeros(length)
-        charges = np.zeros(length)
-        tevss = np.zeros(length)
-        k=0
-        
-        for pepxml_file in paths:
-            d = pepxml.read(pepxml_file)
-            
-            for el in d:
-                if 'search_hit' in el.keys():
-
-                    tev = -0.02 * np.log((el['search_hit'][0]['search_score']['expect']) / 1000)
-                    ch = int(el['assumed_charge'])
-                    spec = el['spectrum']
-                    
-                    if ch not in [2,3,4]:
-                        p_v = 1
-                    else:
-                        p_v = 1 - st.gumbel_r.cdf(tev, pars[ch][0], pars[ch][1])
-
-                    label = 3
-                    if "decoy" in spec:
-                        label = 4
-                    elif "random" in spec:
-                        label = 0
-                    elif "pos" in spec:
-                        label = 1
-  
-                    pvs[k] = p_v
-                    labels[k] = label
-                    charges[k] = ch
-                    tevss[k] = tev
-                    k += 1
-                
-        df = pd.DataFrame(np.array([pvs, labels, charges, tevss]).T)
-        df.columns = ['pv_low', 'label', 'charge', 'tev']
-        df = df[df['pv_low'] != -1]       
-        
-        return df
-
-    #parse pepxml and ground truth info of the validation dataset
-    @staticmethod
-    def __validation_df(pepxml_file, ref_dict, params):
-        
-        d = pepxml.read(pepxml_file)
-        ref_p = pickle.load(open(ref_dict, "rb"))
-        
-        #IDs = np.zeros(len(d))
-        pvs = -1*np.ones(len(d))
-        labels = np.zeros(len(d))
-        charges = np.zeros(len(d))
-        tevss = np.zeros(len(d))
-        k=0
-        for el in d:
-            
-            if 'search_hit' in el.keys():
-
-                scanid = int(el['start_scan'])
-                tev = -0.02 * np.log((el['search_hit'][0]['search_score']['expect']) / 1000)
-                charge = int(el['assumed_charge'])
-               
-                if params[charge][0] == 0:
-                    p_v = 1
-                else:
-                    p_v = 1 - st.gumbel_r.cdf(tev, params[charge][0], params[charge][1])
-
-                pep = el['search_hit'][0]['peptide']
-                new_seq = pep.replace('I', 'X').replace('L', 'X')
-                label = 0
-                
-                
-                if scanid in ref_p.keys():
-                    if ref_p[scanid] == new_seq:
-                        label = 1
-                    else:
-                        label = 0
-                if scanid not in ref_p.keys():
-                    label = 4
-                    
-                if "random" in el['spectrum']:
-                    label = 3
-                    
-                    
-
-                #if 'DECOY' in el['search_hit'][0]['proteins'][0]['protein']:
-                #    label = 4
-                        
-                pvs[k] = p_v
-                labels[k] = label
-                charges[k] = charge
-                tevss[k] = tev
-                k += 1
-                
-        df = pd.DataFrame(np.array([pvs, labels, charges, tevss]).T)
-        df.columns = ['pv_low', 'label', 'charge', 'tev']
-        df = df[df['pv_low'] != -1]       
-        
-        return df
-    
-    
-    @staticmethod
-    def __get_bh(df, bh, pv_name='pv_low'):
-
-        df.loc[:,'bh'] = bh.values
-        finaldf = df[df[pv_name] <= df['bh']]
-
-        return finaldf
 
     #when FDR is calculated using BH method
     def __reps_single(self, reps, length, pvs, labels, len_correct):
-
+        """Get FDP and TP for a single repetition"""
         random.seed()
         new_sel = random.choices(length, k=len(length))
-
         new_pvs = pvs[new_sel]
         new_labels = labels[new_sel]
 
-        fdr, fdp, tp = self.fdr_lower(new_pvs, new_labels, len_correct)
-
-        return fdr, fdp, tp
+        return self.fdr_lower(new_pvs, new_labels, len_correct)
 
 
     def __bootstrap_fdr(self, reps, labels, pvs, len_correct):
@@ -1219,7 +796,7 @@ class Analyze:
         tps = np.zeros((reps, 100))
 
         data = list(map(fu.partial(self.__reps_single, length=length,
-                                            pvs=pvs, labels=labels, 
+                                            pvs=pvs, labels=labels,
                                             len_correct=len_correct), np.zeros(reps)))
         fdrs = [x[0] for x in data]
         fdps = [x[1] for x in data]
@@ -1228,33 +805,33 @@ class Analyze:
         return fdrs, fdps, tps
 
     @staticmethod
-    def map_add_pvs(idx, scores, charges, pars):
-
+    def __map_add_pvs(idx, scores, charges, pars):
+        """calculate p-value for given score and set of params"""
         tev = scores[idx]
-        ch  = charges[idx]
-        pv = 1 - st.gumbel_r.cdf(tev, pars[ch][0], pars[ch][1])
-        return pv
+        charge  = charges[idx]
+        pv_ = 1 - st.gumbel_r.cdf(tev, pars[charge][0], pars[charge][1])
+        return pv_
 
-    def faster_add_pvs(self, scores, charges, params):
+    def __add_pvs(self, scores, charges, params):
         """Calculates p-values from TEV scores separated by charge"""
         indices = np.arange(len(scores))
-        pvs = list(map(fu.partial(self.map_add_pvs,
+        pvs = list(map(fu.partial(self.__map_add_pvs,
                                     scores=scores,
                                     charges=charges,
                                     pars=params), indices))
         return np.array(pvs)
 
-    @staticmethod
-    def add_peps(df, params, colname='pep_em'):
 
-        pvs = np.zeros(len(df))
+    def add_peps(self, dfs, params, colname='pep_em'):
+        """add PEPs from different EM variants to dataframe"""
+        pvs = np.zeros(len(dfs))
 
-        for pos, idx in enumerate(df.index):
-            cur_tev = df.loc[idx, 'tev']
-            ch = int(df.loc[idx, 'charge'])
-            old_mu1, old_beta, old_mu2, old_sigma, old_pi0 = params[ch]
+        for pos, idx in enumerate(dfs.index):
+            cur_tev = dfs.loc[idx, 'tev']
+            charge = int(dfs.loc[idx, 'charge'])
+            old_mu1, old_beta, old_mu2, old_sigma, old_pi0 = params[charge]
 
-            if ch in [2,3,4]:
+            if charge in self.all_charges:
                 neg = ofs.pdf_mubeta(cur_tev, old_mu1, old_beta, 0)
                 posit = st.norm.pdf(cur_tev, old_mu2, old_sigma)
                 pep = old_pi0*neg/(old_pi0*neg + (1-old_pi0)*posit)
@@ -1267,36 +844,33 @@ class Analyze:
 
             pvs[pos] = pep
 
-        df[colname] = pvs
+        dfs[colname] = pvs
 
-        return df
+        return dfs
 
     @staticmethod
-    def pep_fdr(df, ch, colname):
+    def pep_fdr(dfs, charge, colname):
+        """Calculate FDR based on PEP values"""
+        # colname is the name of PEP column
+        dfs = dfs[(dfs["label"] != 4) & (dfs["charge"] == charge)]
+        dfs.sort_values(colname, ascending=True, inplace=True)
+        dfs.reset_index(inplace=True, drop=True)
+        dfs.index += 1
+        dfs['fdr'] = dfs[colname].cumsum()/dfs.index
+        dfs['fdp'] = (dfs.index - dfs['label'].cumsum())/dfs.index
+        dfs['tp'] = dfs['label'].cumsum()/len(dfs[dfs['label'] == 1])
 
-        #colname is the name of PEP column
-        
-        df = df[(df["label"] != 4) & (df["charge"] == ch)]
-        df.sort_values(colname, ascending=True, inplace=True)
-        df.reset_index(inplace=True, drop=True)
-        df.index += 1
-        df['fdr'] = df[colname].cumsum()/df.index
-        df['fdp'] = (df.index - df['label'].cumsum())/df.index
-        df['tp'] = df['label'].cumsum()/len(df[df['label'] == 1])
-        
-        return df['fdr'].to_numpy(), df['fdr'].to_numpy(), df['tp'].to_numpy()
-        
-    
-    
+        return dfs['fdr'].to_numpy(), dfs['fdr'].to_numpy(), dfs['tp'].to_numpy()
+
+
     @staticmethod
     def get_fdr(fdr, pvs, labels, len_correct, idx_for_bh):
-        
-        bh = idx_for_bh*fdr/len(pvs)
-        
-        adj_index = np.where(pvs <= bh)[0]
+        """Calculate FDR using BH procedure"""
+        bh_ = idx_for_bh*fdr/len(pvs)
+        adj_index = np.where(pvs <= bh_)[0]
         len_accepted = len(adj_index)
         adj_labels = labels[adj_index]
-               
+
         if len_accepted == 0:
             len_accepted = 1
 
@@ -1304,249 +878,109 @@ class Analyze:
             len_correct = 0
 
         len_tps = len(adj_labels[adj_labels == 1])
-        
         fdp = 1-len_tps/len_accepted
         if fdp == 1:
             fdp = 0
-        #dec = 2*len(ch3[ch3['label'] == 4])/len(ch3)
-        #tp = len_tps/len_correct
-        tp = len_tps #dommad: return only the number of TP PSMs
-        
-        return fdp, tp
+        # dec = 2*len(ch3[ch3['label'] == 4])/len(ch3)
+        # tps = len_tps/len_correct
+        tps = len_tps # dommad: return only the number of TP PSMs
+
+        return fdp, tps
 
     @staticmethod
-    def __get_bh_pi0(coute):
-        pvs = 1 - coute
-        cumul = np.sort(pvs)
-        df = pd.DataFrame(cumul, columns=['score'])
-        df.index += 1
-        df['cdf'] = df.index/len(df)
+    def __get_pi0(coute_pvs):
+        """Get pi0 estimate using the graphical method describe in Coute et al."""
+        compl_pvs = 1 - coute_pvs
+        sorted_compls = np.sort(compl_pvs)
+        dfs = pd.DataFrame(sorted_compls, columns=['score'])
+        dfs.index += 1
+        dfs['cdf'] = dfs.index/len(dfs)
 
-        #fig, axs = plt.subplots(figsize=(5,5))
-        #axs.plot(df['score'][50000:60000], df['cdf'][50000:60000])
-        #axs.set_xlabel("1-pvalue")
-        #axs.set_ylabel("empirical CDF")
-        low = int(0.4*len(df))
-        up = int(0.6*len(df))
-        lr = st.linregress(df['score'][low:up], df['cdf'][low:up])
-        return lr.slope
+        l_lim = int(0.4*len(dfs))
+        u_lim = int(0.6*len(dfs))
+        lr_ = st.linregress(dfs['score'][l_lim:u_lim], dfs['cdf'][l_lim:u_lim])
+        return lr_.slope
 
 
-   #generate the data of FDP and TP for the selected FDR range
     def fdr_lower(self, pvs, labels, len_correct):
-        
+        """Generate FDP and TP for the selected FDR range"""
         fdrs = np.linspace(0.001, 0.5, 1000)
-        
-        #select only target PSMs of the desired charge
+
+        # select only target PSMs of the desired charge
         sorted_index = np.argsort(pvs)
         idx_for_bh = np.arange(len(pvs)) + 1
         sorted_pvs = pvs[sorted_index]
         sorted_labels = labels[sorted_index]
-     
-        #faster code for fdr calculation
+
+        #faster code for FDR calculation
         data = list(map(fu.partial(self.get_fdr, pvs=sorted_pvs,
                                    labels=sorted_labels,
                                    len_correct=len_correct,
                                    idx_for_bh=idx_for_bh), fdrs))
-        
+
         fdps = [x[0] for x in data]
         tps = [x[1] for x in data]
 
         return fdrs, fdps, tps
-            
-    #plot both FDP and TP vs FDR in the same plot
+
+
     @staticmethod
-    def plot_val_results(ax, fdrs, fdps, tps, lim, col1, col2):
-        
+    def plot_val_results(axs, fdrs, fdps, tps, lim, col1, col2):
+        """Plot both FDP and TP vs FDR in the same plot"""
         #fig, ax = plt.subplots(figsize=(6,6))
         #lim = 0.1
-        ax.grid(color='gray', linestyle='--', linewidth=1, alpha=0.2)
-        ax.plot(fdrs, fdps, color=col1)
-        ax.scatter(fdrs, fdps, marker='.', color=col1)
-        ax.set_ylabel("FDP")
-        ax2=ax.twinx()
+        axs.grid(color='gray', linestyle='--', linewidth=1, alpha=0.2)
+        axs.plot(fdrs, fdps, color=col1)
+        axs.scatter(fdrs, fdps, marker='.', color=col1)
+        axs.set_ylabel("FDP")
+        ax2=axs.twinx()
         #ax.plot(fdr, decs)
         #ax.scatter(fdr, decs, marker='.')
         ax2.plot(fdrs, tps, marker='.', color=col2)
         ax2.set_ylabel("TPR", color=col2)
         ax2.set_ylim(0,1)
-        ax.plot([0,lim], [0,lim], color='k', alpha=0.5)
-        ax.set_xlim(-0.001, lim)
-        ax.set_ylim(-0.001, lim)
+        axs.plot([0,lim], [0,lim], color='k', alpha=0.5)
+        axs.set_xlim(-0.001, lim)
+        axs.set_ylim(-0.001, lim)
         #ax2.legend(['lower', 'decoys', 'x-y'])
 
-
-    #calculation of FDP based on decoy counting
-    @staticmethod    
-    def fdr_dec(df, ch):
+    @staticmethod
+    def fdr_dec(dfs, charge):
+        """calculation of FDP based on decoy counting"""
         fdp = []
         fdrs = []
-        decs = []
-        peps_low = []
-        peps_decs = []
+        # decs = []
+        # peps_low = []
+        # peps_decs = []
         tps = []
-        df = df[df.charge==ch]
-        df.sort_values("tev", ascending=False, inplace=True)
+        dfs = dfs[dfs.charge == charge]
+        dfs.sort_values("tev", ascending=False, inplace=True)
 
-        for i in np.linspace(1, len(df), 1000):
-            if i == 0: continue
-            ch3 = df.iloc[:int(i), :]
-            c = 1-len(ch3[ch3['label'] == 1])/len(ch3)
-            dec = 2*len(ch3[ch3['label'] == 4])/len(ch3)
-            tp = len(ch3[ch3.label == 1])/len(df[df.label==1])
-            tps.append(tp)
-            fdp.append(c)
+        for i in np.linspace(1, len(dfs), 1000):
+            if i == 0:
+                continue
+            data = dfs.iloc[:int(i), :]
+            fdp_val = 1-len(data[data['label'] == 1])/len(data)
+            dec = 2*len(data[data['label'] == 4])/len(data)
+            tp_val = len(data[data.label == 1])/len(dfs[dfs.label==1])
+            tps.append(tp_val)
+            fdp.append(fdp_val)
             fdrs.append(dec)
-            
-        fig, ax = plt.subplots(figsize=(6,6))
-        lim = 0.1
-        ax.grid(color='gray', linestyle='--', linewidth=1, alpha=0.2)
-        ax.plot(fdrs, fdp, color='royalblue')
-        ax.scatter(fdrs, fdp, marker='.', color='royalblue')
-        ax.set_ylabel("FDP", color='royalblue')
-        ax2=ax.twinx()
-        #ax.plot(fdr, decs)
-        #ax.scatter(fdr, decs, marker='.')
-        ax2.plot(fdrs, tps, color='orange')
-        ax2.set_ylabel("TPR", color='orange')
-        ax2.set_ylim(0,1)
-        ax.plot([0,lim], [0,lim], color='k', alpha=0.5)
-        ax.set_xlim(-0.001, lim)
-        ax.set_ylim(-0.001, lim)
-        #ax2.legend(['lower', 'decoys', 'x-y'])
+
+        # fig, ax = plt.subplots(figsize=(6,6))
+        # lim = 0.1
+        # ax.grid(color='gray', linestyle='--', linewidth=1, alpha=0.2)
+        # ax.plot(fdrs, fdp, color='royalblue')
+        # ax.scatter(fdrs, fdp, marker='.', color='royalblue')
+        # ax.set_ylabel("FDP", color='royalblue')
+        # ax2=ax.twinx()
+        # #ax.plot(fdr, decs)
+        # #ax.scatter(fdr, decs, marker='.')
+        # ax2.plot(fdrs, tps, color='orange')
+        # ax2.set_ylabel("TPR", color='orange')
+        # ax2.set_ylim(0,1)
+        # ax.plot([0,lim], [0,lim], color='k', alpha=0.5)
+        # ax.set_xlim(-0.001, lim)
+        # ax.set_ylim(-0.001, lim)
+        # #ax2.legend(['lower', 'decoys', 'x-y'])
         return fdrs, fdp, tps
-    
-     ###########################################################
-
-       ############### VALIDATION with PeptideProphet ###########
-    @staticmethod
-    def peptideprophet_validation(interact_file, no_files, ref_peps):
-
-        length = 500000
-        pvs = -1*np.ones(length)
-        labels = np.zeros(length)
-        charges = np.zeros(length)
-        tevss = np.zeros(length)
-        k=0
-        new_seqs = deque()
-
-
-
-        d = pepxml.read(interact_file)
-
-        for el in d:
-        # if 'DECOY' in el['search_hit'][0]['proteins'][0]['protein']:
-        #     continue
-            if 'search_hit' in el.keys():
-                p_v = el['search_hit'][0]['analysis_result'][0]['peptideprophet_result']['probability']
-                spec = el['spectrum']
-                fval = el['search_hit'][0]['search_score']['expect']
-                fval = -0.02 * np.log(fval / 1000.)
-                pep = el['search_hit'][0]['peptide']
-                new_seq = pep.replace('I', 'X').replace('L', 'X')
-
-        
-                if new_seq in ref_peps:
-                    label = 1
-                else:
-                    label = 0
-
-                
-                    
-                pvs[k] = p_v
-                tevss[k] = fval
-                labels[k] = label
-                new_seqs.append(new_seq)
-                
-                k +=1
-            
-        
-
-        df = pd.DataFrame(np.array([pvs, tevss, labels]).T)
-        df.columns = ['PP_pval', 'TEV', 'label']
-        df = df[df['PP_pval'] != -1]
-        df['peptide'] = new_seqs
-        #df['spectrum'] = specs
-
-        df = df.sort_values('PP_pval', inplace=False, ascending=True)
-        df = df.reset_index(drop=True)
-        df.index += 1
-
-        tree = ET.parse(interact_file)
-        root = tree.getroot()
-
-        #index: FDR threshold
-        #34 0.001
-        #45 0.01
-        #47 0.02
-        #50 0.04
-        #51 0.05
-        #49 0.03
-
-        fdr_indices = [34, 40, 45, 46, 47, 48, 49, 50, 51]
-        thresholds = list(map(lambda x: float(root[0][0][int(no_files)][x].attrib['min_prob']), fdr_indices))
-
-        return df, thresholds
-
-
-    def plot_peptideprophet_validation_results(self, synth_pep_list):
-
-        def replace_IL(pep):
-            return pep.replace('I', 'X').replace('L', 'X')
-
-        def get_stats(df, ths):
-            fdps = []
-            tps = []
-            for i in ths:
-                filtered = df[df['PP_pval'] >= i]
-                fdps.append(len(filtered[filtered.label==0])/len(filtered))
-                tps.append(len(set(filtered[filtered.label==1]["peptide"].values)))
-                
-            return fdps, tps
-
-        peps = pd.read_csv(synth_pep_list, header=None)
-        fdrs = [0.001, 0.005, 0.01, 0.015, 0.02, 0.025, 0.03, 0.04, 0.05]
-        colors = ["royalblue", "orange", "green"]
-        styles = ["-", "--", "-."]
-        fig, ax = plt.subplots(1,2, figsize=(7, 3.5))
-        ax[0].plot([0, 0.05], [0, 0.05], color="grey")
-
-        for idx, name_id in enumerate(["26", "36", "42"]):
-            print(f"this is {name_id}...")
-
-            ref_peps = set(peps[peps[0].str.contains(f"first_pool_{name_id}")][1].values)
-            x_peps = list(map(lambda x: replace_IL(x), ref_peps))
-
-            print("this is td param")
-            df, ths = self.peptideprophet_validation(f"/data/dominik/pp_cdd_validation/interact-{name_id}_td_raw_par.pep.xml", 1, x_peps)
-            fdps, tps = get_stats(df, ths)
-            #ax[0].scatter(fdrs,fdps, color=colors[1])
-            ax[0].plot(fdrs, fdps, color=colors[1], linestyle=styles[idx])
-            #ax[1].scatter(fdrs,tps, color=colors[1])
-            ax[1].plot(fdrs, tps, color=colors[1], linestyle=styles[idx])
-
-            print("this is td nonparam")
-            df, ths = self.peptideprophet_validation(f"/data/dominik/pp_cdd_validation/interact-{name_id}_td.pep.xml", 1, x_peps)
-            fdps, tps = get_stats(df, ths)
-            #ax[0].scatter(fdrs,fdps, color=colors[2])
-            ax[0].plot(fdrs, fdps, color=colors[2], linestyle=styles[idx])
-            #ax[1].scatter(fdrs,tps, color=colors[2])
-            ax[1].plot(fdrs, tps, color=colors[2], linestyle=styles[idx])
-
-            print("this is cdd")
-            df, ths = self.peptideprophet_validation(f"/data/dominik/pp_cdd_validation/interact-cdd_{name_id}.pep.xml", 1, x_peps)
-            fdps, tps = get_stats(df, ths)
-            #ax[0].scatter(fdrs,fdps, color=colors[0])
-            ax[0].plot(fdrs, fdps, color=colors[0], linestyle=styles[idx])
-            #ax[1].scatter(fdrs,tps, color=colors[0])
-            ax[1].plot(fdrs, tps, color=colors[0], linestyle=styles[idx])
-
-
-        ax[0].set_xlabel("FDR threshold")
-        ax[0].set_ylabel("FDP")
-        ax[1].set_xlabel("FDR threshold")
-        ax[1].set_ylabel("number of peptides identified")
-
-        fig.tight_layout()
-
-        plt.savefig("peptideprophet_validation.png", dpi=600)
