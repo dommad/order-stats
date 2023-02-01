@@ -2,23 +2,22 @@
 # Comet MS/MS search engine parameters file.
 # Everything following the '#' symbol is treated as a comment.
 
-database_name = /data/dominik/databases/human_rev.fasta
+database_name = /home/dominik/databases/human_td.fasta
 decoy_search = 0                       # 0=no (default), 1=concatenated search, 2=separate search
 peff_format = 0                        # 0=no (normal fasta, default), 1=PEFF PSI-MOD, 2=PEFF Unimod
 peff_obo =                             # path to PSI Mod or Unimod OBO file
 
-num_threads = 0                        # 0=poll CPU to set num threads; else specify num threads directly (max 128)
+num_threads = 60                        # 0=poll CPU to set num threads; else specify num threads directly (max 128)
 
 #
 # masses
 #
-peptide_mass_tolerance = 3
-peptide_mass_units = 0                 # 0=amu, 1=mmu, 2=ppm
+peptide_mass_tolerance = 20.00
+peptide_mass_units = 2                 # 0=amu, 1=mmu, 2=ppm
 mass_type_parent = 1                   # 0=average masses, 1=monoisotopic masses
 mass_type_fragment = 1                 # 0=average masses, 1=monoisotopic masses
-precursor_tolerance_type = 0           # 0=MH+ (default), 1=precursor m/z; only valid for amu/mmu tolerances
+precursor_tolerance_type = 1           # 0=MH+ (default), 1=precursor m/z; only valid for amu/mmu tolerances
 isotope_error = 3                      # 0=off, 1=0/1 (C13 error), 2=0/1/2, 3=0/1/2/3, 4=-8/-4/0/4/8 (for +4/+8 labeling)
-
 
 #
 # search enzyme
@@ -33,10 +32,10 @@ allowed_missed_cleavage = 2            # maximum value is 5; for enzyme search
 # format:  <mass> <residues> <0=variable/else binary> <max_mods_per_peptide> <term_distance> <n/c-term> <required> <neutral_loss>
 #     e.g. 79.966331 STY 0 3 -1 0 0 97.976896
 #
-variable_mod01 = 15.9949 M 0 3 -1 0 0
-#variable_mod02 = 229.162932 n 0 1 -1 2 0 # peptide N-terminus
-variable_mod03 = 42.010565 n 0 1 -1 0 0 # protein N-terminus
-#variable_mod04 =  79.966331 STY 0 3 -1 0 0
+variable_mod01 = 15.9949 M 0 3 -1 0 0 0.0
+variable_mod02 = 0.0 X 0 3 -1 0 0 0.0
+variable_mod03 = 0.0 X 0 3 -1 0 0 0.0
+variable_mod04 = 0.0 X 0 3 -1 0 0 0.0
 variable_mod05 = 0.0 X 0 3 -1 0 0 0.0
 variable_mod06 = 0.0 X 0 3 -1 0 0 0.0
 variable_mod07 = 0.0 X 0 3 -1 0 0 0.0
@@ -51,16 +50,18 @@ require_variable_mod = 0
 # ion trap ms/ms:  1.0005 tolerance, 0.4 offset (mono masses), theoretical_fragment_ions = 1
 # high res ms/ms:    0.02 tolerance, 0.0 offset (mono masses), theoretical_fragment_ions = 0, spectrum_batch_size = 15000
 #
-fragment_bin_tol = 1.0005             # binning to use on fragment ions
+fragment_bin_tol = 1.0005              # binning to use on fragment ions
 fragment_bin_offset = 0.4              # offset position to start the binning (0.0 to 1.0)
-theoretical_fragment_ions = 0          # 0=use flanking peaks, 1=M peak only
+theoretical_fragment_ions = 1          # 0=use flanking peaks, 1=M peak only
 use_A_ions = 0
 use_B_ions = 1
 use_C_ions = 0
 use_X_ions = 0
 use_Y_ions = 1
 use_Z_ions = 0
-use_NL_ions = 1                       # 0=no, 1=yes to consider NH3/H2O neutral loss peaks
+use_Z1_ions = 0
+use_NL_ions = 0                        # 0=no, 1=yes to consider NH3/H2O neutral loss peaks
+
 #
 # output
 #
@@ -70,7 +71,7 @@ output_pepxmlfile = 1                  # 0=no, 1=yes  write pepXML file
 output_mzidentmlfile = 0               # 0=no, 1=yes  write mzIdentML file
 output_percolatorfile = 0              # 0=no, 1=yes  write Percolator pin file
 print_expect_score = 1                 # 0=no, 1=yes to replace Sp with expect in out & sqt
-num_output_lines = 10                   # num peptide results to show
+num_output_lines = 1                   # num peptide results to show
 
 sample_enzyme_number = 1               # Sample enzyme which is possibly different than the one applied to the search.
                                        # Used to calculate NTT & NMC in pepXML output (default=1 for trypsin).
@@ -97,7 +98,7 @@ nucleotide_reading_frame = 0           # 0=proteinDB, 1-6, 7=forward three, 8=re
 clip_nterm_methionine = 0              # 0=leave sequences as-is; 1=also consider sequence w/o N-term methionine
 spectrum_batch_size = 15000            # max. # of spectra to search at a time; 0 to search the entire scan range in one loop
 decoy_prefix = DECOY_                  # decoy entries are denoted by this string which is pre-pended to each protein accession
-equal_I_and_L = 0                     # 0=treat I and L as different; 1=treat I and L as same
+equal_I_and_L = 1                      # 0=treat I and L as different; 1=treat I and L as same
 output_suffix =                        # add a suffix to output base names i.e. suffix "-C" generates base-C.pep.xml from base.mzXML input
 mass_offsets =                         # one or more mass offsets to search (values substracted from deconvoluted precursor mass)
 precursor_NL_ions =                    # one or more precursor neutral loss masses, will be added to xcorr analysis
@@ -105,7 +106,7 @@ precursor_NL_ions =                    # one or more precursor neutral loss mass
 #
 # spectral processing
 #
-minimum_peaks = 50                     # required minimum number of peaks in spectrum to search (default 10)
+minimum_peaks = 10                     # required minimum number of peaks in spectrum to search (default 10)
 minimum_intensity = 0                  # minimum intensity value to read in
 remove_precursor_peak = 0              # 0=no, 1=yes, 2=all charge reduced precursor peaks (for ETD), 3=phosphate neutral loss peaks
 remove_precursor_tolerance = 1.5       # +- Da tolerance for precursor removal

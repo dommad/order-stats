@@ -1,10 +1,10 @@
-# MSFragger-3.4
+# MSFragger-3.5
 num_threads = 0                             # Number of CPU threads to use. 
-database_name = ./ecoli_td.fasta                  # Path to the protein database file in FASTA format.
+database_name = /home/dominik/databases/human_td.fasta                  # Path to the protein database file in FASTA format.
 
-precursor_mass_lower = -3                  # Lower bound of the precursor mass window.
-precursor_mass_upper = 3                   # Upper bound of the precursor mass window.
-precursor_mass_units = 0                    # Precursor mass tolerance units (0 for Da, 1 for ppm).
+precursor_mass_lower = -20                  # Lower bound of the precursor mass window.
+precursor_mass_upper = 20                   # Upper bound of the precursor mass window.
+precursor_mass_units = 1                    # Precursor mass tolerance units (0 for Da, 1 for ppm).
 data_type = 0                               # Data type (0 for DDA, 1 for DIA, 2 for DIA-narrow-window).
 precursor_true_tolerance = 20               # True precursor mass tolerance (window is +/- this value).
 precursor_true_units = 1                    # True precursor mass tolerance units (0 for Da, 1 for ppm).
@@ -25,6 +25,8 @@ localize_delta_mass = 0                     # Include fragment ions mass-shifted
 delta_mass_exclude_ranges = (-1.5,3.5)      # Exclude mass range for shifted ions searching.
 fragment_ion_series = b,y                   # Ion series used in search, specify any of a,b,c,x,y,z,b-18,y-18,b~,y~,Y (comma separated).
 # ion_series_definitions =                  # User defined ion series. Example: "b* N -17.026548;b0 N -18.010565".
+remainder_fragment_masses =                 # masses for b~/y~ ions (multiple values separated by /). Only used if b~/y~ are specified in the fragment_ion_series list
+min_sequence_matches = 2                    # [labile/glyco search only] Minimum number of sequence-specific (not Y) ions to record a match
 search_enzyme_name_1 = stricttrypsin        # Name of the first enzyme.
 search_enzyme_name_2 =                      # Name of the second enzyme.
 search_enzyme_cut_1 = KR                    # First enzyme's cutting amino acid.
@@ -43,7 +45,7 @@ clip_nTerm_M = 1                            # Specifies the trimming of a protei
 # [ and ] specifies protein termini, n and c specifies
 # peptide termini
 variable_mod_01 = 15.994915 M 3
-variable_mod_02 = 42.010565 [^ 1
+#variable_mod_02 = 42.010565 [^ 1
 # variable_mod_03 = 79.966331 STY 3
 # variable_mod_04 = -17.02650 nQnC 1
 # variable_mod_05 = -18.01060 nE 1
@@ -60,7 +62,7 @@ output_report_topN = 1                      # Reports top N PSMs per input spect
 output_max_expect = 50                      # Suppresses reporting of PSM if top hit has expectation value greater than this threshold.
 report_alternative_proteins = 0             # Report alternative proteins for peptides that are found in multiple proteins (0 for no, 1 for yes).
 
-precursor_charge = 1 4                      # Assumed range of potential precursor charge states. Only relevant when override_charge is set to 1.
+precursor_charge = 1 6                      # Assumed range of potential precursor charge states. Only relevant when override_charge is set to 1.
 override_charge = 0                         # Ignores precursor charge and uses charge state specified in precursor_charge range (0 or 1).
 
 digest_min_length = 7                       # Minimum length of peptides to be generated during in-silico digestion.
@@ -89,6 +91,7 @@ remove_precursor_peak = 1                   # Remove precursor peaks from tandem
                                             # 2 = remove the peaks with all charge states (only for DDA mode).
 remove_precursor_range = -1.5,1.5           # m/z range in removing precursor peaks. Only for DDA mode. Unit: Th.
 intensity_transform = 0                     # Transform peaks intensities with sqrt root. 0 = not transform; 1 = transform using sqrt root.
+activation_types = HCD                      	 # Filter to only search scans of provided activation type(s). / separated. Allowed: HCD, CID, ETD, ECD.
 
 # Fixed modifications
 add_Cterm_peptide = 0.000000

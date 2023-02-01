@@ -7,7 +7,6 @@ from xml.etree import ElementTree as ET
 import pickle
 import sys
 import time
-import deepdish as dd
 
 
 
