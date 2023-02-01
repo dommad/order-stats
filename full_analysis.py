@@ -7,6 +7,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import scipy.stats as st
 import numpy as np
+from xml.etree import ElementTree as ET
 from pyteomics import pepxml, mzid
 from KDEpy import FFTKDE
 from sklearn.metrics import auc
@@ -112,7 +113,7 @@ class Analyze:
         for ch_idx in range(charge_no):
 
             top_hit = self.tevs[ch_idx][:,0]
-            # top_hit = top_hit[top_hit > 0.04] # dommad: don't count scores at 0 and below
+            top_hit = top_hit[top_hit > 0.01] # dommad: don't count scores at 0 and below
             mode_pars = []
             bics = []
             mode_pars.append(self.__get_lr_mean_beta(mle_pars[ch_idx]))
@@ -138,7 +139,7 @@ class Analyze:
         lr_mu, lr_beta, m_mu, m_beta = self.__get_alt_params(top_hit, mode)
         print(lr_mu, lr_beta, m_mu, m_beta)
 
-        bic_lr = 0.8*self.__get_bic(top_hit, 2, 0, [lr_mu, lr_beta])
+        bic_lr = self.__get_bic(top_hit, 2, 0, [lr_mu, lr_beta]) #dommad removed 0.8
         bic_m = self.__get_bic(top_hit, 2, 0, [m_mu, m_beta])
 
         tmp_pars.append([lr_mu, lr_beta])
@@ -167,14 +168,15 @@ class Analyze:
         return pars
 
 
-    def execute_validation(self, pepxml_f, top_n=10, reps=500, ext_params="", dec_paths=()):
+    def execute_validation(self, pepxml_f, top_n=10, reps=500, ext_params="", dec_paths=(), mode='Tide'):
         """read the pepxml, automatically add the p-values based on lower order estimates"""
 
         if ext_params != "":
             self.params_est = ext_params
 
-        scrs, chars, low_pvs, coute_pvs, lbls = self.__parse_get_pvals(pepxml_f, self.params_est)
-        dec_data = self.__parse_tide_comet(dec_paths, top_n)
+        scrs, chars, low_pvs, coute_pvs, lbls = self.__parse_get_pvals(pepxml_f, self.params_est, option=mode)
+
+        dec_data = self.__parse_tide_comet(dec_paths, top_n, option=mode, decoy=bool(mode == 'Comet'))
 
         dec_pars = self.__get_dec_pars(dec_data)
         cdd_pars = pd.read_csv('./cdd_params.txt', header=None).to_numpy()
@@ -194,9 +196,13 @@ class Analyze:
         cur_coute = coute_pvs[idx_non_dec]
         self.len_correct = len(cur_labels[cur_labels == 1])
 
+        print("here")
         stats_low = self.__bootstrap(reps, cur_labels, cur_lower)
+        print("here")
         stats_dec = self.__bootstrap(reps, cur_labels, cur_decoy)
+        print("here")
         stats_cdd = self.__bootstrap(reps, cur_labels, cur_cdd)
+        print("here")
         stats_coute = self.__bootstrap(reps, cur_labels, cur_coute)
 
         all_boot_stats.append([stats_low, stats_dec, stats_cdd, stats_coute])
@@ -280,6 +286,7 @@ class Analyze:
         axs.set_xlabel("FDR")
         axs.set_ylabel("Correctly identified PSMs")
         axs.set_ylim(0,17000)
+        axs.set_xlim(0,0.1)
 
 
     #plot the FDP vs FDR results of validation
@@ -372,6 +379,8 @@ class Analyze:
     def __add_pp_plot(self, idx, hit, axs, pars_list):
         """break down the code"""
         data = sorted(self.tevs[idx][:, hit+1])
+        data = np.array(data)
+        data = data[data>0.01] #dommad
 
         mle_par, mm_par = pars_list
         mle_pars = self.__extract_pars(mle_par[idx], hit)
@@ -418,7 +427,7 @@ class Analyze:
     def __get_hit_scores(self, idx, hit):
         """get hit scores from TEV array"""
         data = self.tevs[idx][:, hit+1]
-        data = data[data > 0.04] # dommad use scores above 0
+        data = data[data > 0.01] # dommad use scores above 0
         if len(data) == 0:
             return (), ()
         kde_sup, kde_den = self.__get_kde_density(data)
@@ -550,7 +559,7 @@ class Analyze:
             axs.annotate(idx+offset, (pair[0], pair[1]-0.0002), color=col)
 
 
-    def __parse_tide_comet(self, paths, top_n, option='Tide'):
+    def __parse_tide_comet(self, paths, top_n, option='Tide', decoy=False):
         """fast parsing of pepXML results from Tide or Comet"""
         data = deque()
 
@@ -558,6 +567,9 @@ class Analyze:
             cur_file = pepxml.read(path)
             psms = filter(lambda x: 'search_hit' in x.keys(), cur_file)
             has_top_n = filter(lambda x: len(x['search_hit']) == top_n, psms)
+
+            if decoy:
+                has_top_n = filter(lambda x: 'DECOY' in x['search_hit'][0]['proteins'][0]['protein'], has_top_n)
 
             if option == 'Tide':
                 scores = list(map(self.__get_tide_scores, has_top_n))
@@ -644,7 +656,7 @@ class Analyze:
 
         for hit in range(1, length): # skip first hit since it's a mixture
             cur_tev = scores[:, hit]
-            cur_tev = cur_tev[cur_tev > 0.04]
+            cur_tev = cur_tev[cur_tev > 0.01] #dommad
             len_ = len(cur_tev)
             cur_tev = cur_tev[int(len_*0.01):int(len_*0.99)]
             params[hit-1] = ofs.mle_mubeta(cur_tev, hit)
@@ -713,7 +725,7 @@ class Analyze:
 
    ############### VALIDATION with BH procedure #############
 
-    def __parse_get_pvals(self, paths, pars):
+    def __parse_get_pvals(self, paths, pars, option='Tide'):
         """Parse the data and get lower-order and Coute's p-vals at the same time"""
         pvs = deque()
         ground_truth = deque()
@@ -726,7 +738,7 @@ class Analyze:
 
         big_data = list(map(fu.partial(self.__parse_data,
                                         keywords=keywords,
-                                        paths=paths, labels=labels, pars=pars),
+                                        paths=paths, labels=labels, pars=pars, option=option),
                                         np.arange(3)))
 
         for item in big_data:
@@ -753,8 +765,23 @@ class Analyze:
 
         return cur_tev, charge, fin_pv, sidak_pv
 
+    def __get_val_data_comet(self, row, pars):
+        num_match = row['search_hit'][0]['num_matched_peptides']
+        e_val = row['search_hit'][0]['search_score']['expect']
+        p_val = e_val/num_match
+        cur_tev = -TH_BETA*np.log(max(e_val, 10e-16)/TH_N0)
+        sidak_pv = 1-pow(1-p_val, num_match)
+        charge = int(row['assumed_charge'])
+
+        if charge not in self.all_charges:
+            fin_pv = 1
+        else:
+            fin_pv = 1 - st.gumbel_r.cdf(cur_tev, pars[charge][0], pars[charge][1])
+
+        return cur_tev, charge, fin_pv, sidak_pv
+
    #process randoms
-    def __parse_data(self, idx, keywords, paths, labels, pars):
+    def __parse_data(self, idx, keywords, paths, labels, pars, option='Tide'):
 
         keyword = keywords[idx]
         label_value = labels[idx]
@@ -763,7 +790,10 @@ class Analyze:
 
         for pepxml_file in rand_paths:
             cur_file = pepxml.read(pepxml_file)
-            items += list(cur_file.map(self.__get_val_data, args=(pars,)))
+            if option == 'Comet':
+                items += list(cur_file.map(self.__get_val_data_comet, args=(pars,)))
+            else:
+                items += list(cur_file.map(self.__get_val_data, args=(pars,)))
 
         scores = [x[0] for x in items]
         charges = [x[1] for x in items]
@@ -984,3 +1014,103 @@ class Analyze:
         # ax.set_ylim(-0.001, lim)
         # #ax2.legend(['lower', 'decoys', 'x-y'])
         return fdrs, fdp, tps
+
+
+    #     ############### VALIDATION with PeptideProphet: to be revised in the future ###########
+    # @staticmethod
+    # def peptideprophet_validation(interact_file, no_files):
+    #     """Parse PeptideProphet files and extract necessary data"""
+    #     length = 500000
+    #     pvs = -1*np.ones(length)
+    #     labels = np.zeros(length)
+    #     # charges = np.zeros(length)
+    #     tevss = np.zeros(length)
+    #     k=0
+    #     new_seqs = deque()
+    #     spec_data = pepxml.read(interact_file)
+    #     keywords = ['pos', 'rand', 'dec']
+
+    #     for psm in spec_data:
+    #     # if 'DECOY' in el['search_hit'][0]['proteins'][0]['protein']:
+    #     #     continue
+    #         if 'search_hit' in psm.keys():
+    #             first_hit = psm['search_hit'][0]
+    #             p_v = first_hit['analysis_result'][0]['peptideprophet_result']['probability']
+    #             spec = psm['spectrum']
+    #             fval = first_hit['search_score']['expect']
+    #             fval = -0.02 * np.log(fval / 1000.)
+    #             #pep = first_hit['peptide']
+    #             #new_seq = pep.replace('I', 'X').replace('L', 'X')
+
+    #             if keywords[0] in spec:
+    #                 label = 1
+    #             elif keywords[1] in spec:
+    #                 label = 0
+    #             elif keywords[2] in spec:
+    #                 label = 4
+
+    #             pvs[k] = p_v
+    #             tevss[k] = fval
+    #             labels[k] = label
+    #             #new_seqs.append(new_seq)
+
+    #             k +=1
+
+    #     dfs = pd.DataFrame(np.array([pvs, tevss, labels]).T)
+    #     dfs.columns = ['PP_pval', 'TEV', 'label']
+    #     dfs = dfs[dfs['PP_pval'] != -1]
+    #     #dfs['peptide'] = new_seqs
+    #     #df['spectrum'] = specs
+    #     dfs = dfs.sort_values('PP_pval', inplace=False, ascending=True)
+    #     dfs = dfs.reset_index(drop=True)
+    #     dfs.index += 1
+    #     tree = ET.parse(interact_file)
+    #     root = tree.getroot()
+    #     fdr_idx = [34, 40, 45, 46, 47, 48, 49, 50, 51]
+    #     thr = list(map(lambda x: float(root[0][0][int(no_files)][x].attrib['min_prob']), fdr_idx))
+    #     return dfs, thr
+
+    # @staticmethod
+    # def get_pp_stats(dfs, ths):
+    #     """Calculate FDP, TP"""
+    #     fdps = []
+    #     tps = []
+    #     for i in ths:
+    #         above_th = dfs[dfs['PP_pval'] >= i]
+    #         fdps.append(len(above_th[above_th.label==0])/len(above_th))
+    #         tps.append(len(above_th[above_th.label==1].values))
+    #     return fdps, tps
+
+    # def plot_peptideprophet_validation_results(self, synth_pep_list, res_files):
+    #     """calculate FDR estimation stats and plot the results,
+    #     res_files: interact files from searching with CDD, nonparam decoy,
+    #     lower-order, param decoy"""
+
+    #     peps = pd.read_csv(synth_pep_list, header=None)
+    #     fdrs = [0.001, 0.005, 0.01, 0.015, 0.02, 0.025, 0.03, 0.04, 0.05]
+    #     colors = ["royalblue", "orange", "green"]
+    #     styles = ["-", "--", "-."]
+    #     fig, axs = plt.subplots(1, 2, figsize=(7, 3.5))
+    #     axs[0].plot([0, 0.05], [0, 0.05], color="grey")
+    #     name_id = 26
+    #     #for idx, name_id in enumerate(["26", "36", "42"]):
+    #     #ref_peps = set(peps[peps[0].str.contains(f"first_pool_{name_id}")][1].values)
+    #     #x_peps = list(map(lambda x: x.replace('I', 'X').replace('L', 'X'), ref_peps))
+
+    #     for idx in [0]:
+    #         for idx2, cur_file in enumerate(res_files):
+    #             no_f = 1
+    #             if idx  == 0:
+    #                 no_f = 2
+    #             dfs, ths = self.peptideprophet_validation(cur_file, no_f)
+    #             fdps, tps = self.get_pp_stats(dfs, ths)
+    #             axs[0].plot(fdrs, fdps, color=colors[idx2], linestyle=styles[idx])
+    #             axs[1].plot(fdrs, tps, color=colors[idx2], linestyle=styles[idx])
+
+
+    #     axs[0].set_xlabel("FDR threshold")
+    #     axs[0].set_ylabel("FDP")
+    #     axs[1].set_xlabel("FDR threshold")
+    #     axs[1].set_ylabel("number of peptides identified")
+    #     fig.tight_layout()
+    #     plt.savefig("new_peptideprophet_validation.png", dpi=600)

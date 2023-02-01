@@ -1,17 +1,19 @@
-"""Simulations to support assumptions and hypotheses made in the study"""
-from datetime import datetime
+"""Simulations to support assumptions made in the study"""
 import numpy as np
 import matplotlib.pyplot as plt
 import scipy.stats as st
 import order_formulae as of
-import importlib as imp
-imp.reload(of)
 ofs = of.Tools()
 
 
 SMALL_SIZE = 10
 MEDIUM_SIZE = 12
 BIGGER_SIZE = 14
+
+
+TH_N0 = 1000.
+TH_MU = 0.02*np.log(TH_N0)
+TH_BETA = 0.02
 
 #plt.rc('font', size=SMALL_SIZE)          # controls default text sizes
 plt.rc('axes', titlesize=SMALL_SIZE)     # fontsize of the axes title
@@ -26,7 +28,7 @@ class Simulator:
 
     def __init__(self) -> None:
         pass
-    
+
 
     def simulate_pp_plots(self):
         """Compare finite N and asymptotic forms for k<=10 using P-P plot"""
@@ -34,7 +36,7 @@ class Simulator:
         mu_, beta = (0.02*np.log(1000), 0.02)
         sam = self.sample_tevs(20, 10, n_samples=1000, start_pars=(mu_, beta))
         fig, axs = plt.subplots(2,5, figsize=(12,5))
-        
+
         for idx in range(10):
             fins = ofs.cdf_finite_n(sam[idx], mu_, beta, 10-idx, 100)
             asym = ofs.universal_cdf(sam[idx], mu_, beta, 10-idx)
@@ -101,7 +103,7 @@ class Simulator:
                             no_cand,
                             no_k,
                             n_samples=1000,
-                            start_pars=(0.13815510557964275, 0.02))
+                            start_pars=(TH_MU, TH_BETA))
 
             pars, vals_f, vals_a = self.estimate_params(ordered_tevs, mode=mode_mle)
             new_pars += pars[4:] # start counting from top 5 downwards
@@ -119,7 +121,7 @@ class Simulator:
         """Plots the scatterplot of mu vs beta estimates"""
         fig, axs = plt.subplots(figsize=(6,6))
         axs.scatter(data[:,0], data[:,1], s=5)
-        axs.scatter([0.13815510557964275], [0.02], color='orange') # theoretical point
+        axs.scatter([TH_MU], [TH_BETA], color='orange') # theoretical point
 
         l_r = st.linregress(data[:,0], data[:,1])
         x_s = np.array([min(data[:,0]), max(data[:,0])])
@@ -132,23 +134,3 @@ class Simulator:
 
         #timestamp = datetime.now().strftime('%d-%m-%Y.%H_%M_%S')
         fig.savefig(f"{outname}_mubeta_scatter.png", dpi=400, bbox_inches='tight')
-
-
-# simulation 1: draws from simulated TEV distribution, then test if asymptotic forms work on them
-# aim: show that our analysis works on the perfect case OR reveal the estimator bias
-
-
-
-
-
-
-# simulation 2: for draws from simulated TEV distribution, compare finite N vs asymptotic form
-# aim: show that our analysis based on asymptotic forms is justified
-
-
-# simulation 3: dependent RVs (how to do it?)
-# aim: show that independence assumption is not necessary for our method to hold perfectly
-
-
-
-# simulation 4: here put the code for Comet's e-value simulation and what's the problem with LR
