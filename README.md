@@ -1,4 +1,4 @@
-# Modeling Decoy-Free FDR Estimation in Proteomics Using Lower-Order Statistics
+# Decoy-Free FDR Estimation in Proteomics Using Lower-Order Statistics
 
 example_clean.ipynb - Jupyter Notebook with sample usage of the scripts to generate the data presented in the study, including a .txt file with parameters of lower-order negative models that can be fed to modified PeptideProphet (as provided in https://github.com/dommad/CDD).
 
