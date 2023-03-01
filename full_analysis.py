@@ -181,7 +181,11 @@ class Analyze:
         dec_pars = self.__get_dec_pars(dec_data)
         cdd_pars = pd.read_csv('./cdd_params.txt', header=None).to_numpy()
 
-        pi_0 = self.__get_pi0(coute_pvs[np.where(lbls != 4)])
+        # this pi_0 estimate is calculated according to Jiang and Doerge (2008)
+        # pi_0 = PiZeroEstimator().find_optimal_pi0(low_pvs, 10)
+
+        pi_0 = len(low_pvs[np.where(lbls == 0)])/len(low_pvs[np.where(lbls != 4)])
+                                            
 
         dec_pvs = self.__add_pvs(scrs, chars, dec_pars)
         cdd_pvs = self.__add_pvs(scrs, chars, cdd_pars)
@@ -1016,101 +1020,87 @@ class Analyze:
         return fdrs, fdp, tps
 
 
-    #     ############### VALIDATION with PeptideProphet: to be revised in the future ###########
-    # @staticmethod
-    # def peptideprophet_validation(interact_file, no_files):
-    #     """Parse PeptideProphet files and extract necessary data"""
-    #     length = 500000
-    #     pvs = -1*np.ones(length)
-    #     labels = np.zeros(length)
-    #     # charges = np.zeros(length)
-    #     tevss = np.zeros(length)
-    #     k=0
-    #     new_seqs = deque()
-    #     spec_data = pepxml.read(interact_file)
-    #     keywords = ['pos', 'rand', 'dec']
+class PiZeroEstimator:
+    """estimate pi0 for given set of p-values"""
 
-    #     for psm in spec_data:
-    #     # if 'DECOY' in el['search_hit'][0]['proteins'][0]['protein']:
-    #     #     continue
-    #         if 'search_hit' in psm.keys():
-    #             first_hit = psm['search_hit'][0]
-    #             p_v = first_hit['analysis_result'][0]['peptideprophet_result']['probability']
-    #             spec = psm['spectrum']
-    #             fval = first_hit['search_score']['expect']
-    #             fval = -0.02 * np.log(fval / 1000.)
-    #             #pep = first_hit['peptide']
-    #             #new_seq = pep.replace('I', 'X').replace('L', 'X')
+    def __init__(self):
+        pass
 
-    #             if keywords[0] in spec:
-    #                 label = 1
-    #             elif keywords[1] in spec:
-    #                 label = 0
-    #             elif keywords[2] in spec:
-    #                 label = 4
+    @staticmethod
+    def get_pi0_b(pvs, b_val):
+        """calculate pi0 estimate for given b value"""
+        i = 1
+        condition = False
 
-    #             pvs[k] = p_v
-    #             tevss[k] = fval
-    #             labels[k] = label
-    #             #new_seqs.append(new_seq)
+        while condition is False:
+            t_i = (i-1)/b_val
+            t_iplus = i/b_val
+            ns_i = len(pvs[(pvs < t_iplus) & (pvs >= t_i)])
+            nb_i = len(pvs[pvs >= t_i])
+            condition = bool(ns_i <= nb_i/(b_val - i + 1))
+            i += 1
 
-    #             k +=1
+        i -= 1
 
-    #     dfs = pd.DataFrame(np.array([pvs, tevss, labels]).T)
-    #     dfs.columns = ['PP_pval', 'TEV', 'label']
-    #     dfs = dfs[dfs['PP_pval'] != -1]
-    #     #dfs['peptide'] = new_seqs
-    #     #df['spectrum'] = specs
-    #     dfs = dfs.sort_values('PP_pval', inplace=False, ascending=True)
-    #     dfs = dfs.reset_index(drop=True)
-    #     dfs.index += 1
-    #     tree = ET.parse(interact_file)
-    #     root = tree.getroot()
-    #     fdr_idx = [34, 40, 45, 46, 47, 48, 49, 50, 51]
-    #     thr = list(map(lambda x: float(root[0][0][int(no_files)][x].attrib['min_prob']), fdr_idx))
-    #     return dfs, thr
+        summand = 0
+        for j in range(i-1, b_val+1):
+            t_j = (j-1)/b_val
+            summand += len(pvs[pvs >= t_j])/((1-t_j)*len(pvs))
 
-    # @staticmethod
-    # def get_pp_stats(dfs, ths):
-    #     """Calculate FDP, TP"""
-    #     fdps = []
-    #     tps = []
-    #     for i in ths:
-    #         above_th = dfs[dfs['PP_pval'] >= i]
-    #         fdps.append(len(above_th[above_th.label==0])/len(above_th))
-    #         tps.append(len(above_th[above_th.label==1].values))
-    #     return fdps, tps
+        pi_0 = 1/(b_val - i + 2)*summand
 
-    # def plot_peptideprophet_validation_results(self, synth_pep_list, res_files):
-    #     """calculate FDR estimation stats and plot the results,
-    #     res_files: interact files from searching with CDD, nonparam decoy,
-    #     lower-order, param decoy"""
+        return pi_0
 
-    #     peps = pd.read_csv(synth_pep_list, header=None)
-    #     fdrs = [0.001, 0.005, 0.01, 0.015, 0.02, 0.025, 0.03, 0.04, 0.05]
-    #     colors = ["royalblue", "orange", "green"]
-    #     styles = ["-", "--", "-."]
-    #     fig, axs = plt.subplots(1, 2, figsize=(7, 3.5))
-    #     axs[0].plot([0, 0.05], [0, 0.05], color="grey")
-    #     name_id = 26
-    #     #for idx, name_id in enumerate(["26", "36", "42"]):
-    #     #ref_peps = set(peps[peps[0].str.contains(f"first_pool_{name_id}")][1].values)
-    #     #x_peps = list(map(lambda x: x.replace('I', 'X').replace('L', 'X'), ref_peps))
+    def get_all_pi0s(self, pvs):
+        """calculate pi0 for each b value"""
+        # B is from I = {5, 10, 20, 50, 100}
 
-    #     for idx in [0]:
-    #         for idx2, cur_file in enumerate(res_files):
-    #             no_f = 1
-    #             if idx  == 0:
-    #                 no_f = 2
-    #             dfs, ths = self.peptideprophet_validation(cur_file, no_f)
-    #             fdps, tps = self.get_pp_stats(dfs, ths)
-    #             axs[0].plot(fdrs, fdps, color=colors[idx2], linestyle=styles[idx])
-    #             axs[1].plot(fdrs, tps, color=colors[idx2], linestyle=styles[idx])
+        pi0s = []
+        b_set = [5, 10, 20, 50, 100]
+
+        for b_val in b_set:
+            pi0s.append(self.get_pi0_b(pvs, b_val))
+        
+        return pi0s
 
 
-    #     axs[0].set_xlabel("FDR threshold")
-    #     axs[0].set_ylabel("FDP")
-    #     axs[1].set_xlabel("FDR threshold")
-    #     axs[1].set_ylabel("number of peptides identified")
-    #     fig.tight_layout()
-    #     plt.savefig("new_peptideprophet_validation.png", dpi=600)
+    def get_boostrap_pi0s(self, pvs, no_reps, b_val):
+
+        pi0_estimates = np.zeros(no_reps)
+
+        for rep in range(no_reps):
+            random.seed()
+            new_pvs = np.array(random.choices(pvs, k=len(pvs)))
+            pi0_estimates[rep] = self.get_pi0_b(new_pvs, b_val)
+
+        return pi0_estimates
+
+    @staticmethod
+    def get_mse(pi0_bootstrap, pi0_true):
+        """Calculates MSE for given set of p-values and true pi0 value"""
+        summand = 0
+        for i in range(len(pi0_bootstrap)):
+            summand += pow(pi0_bootstrap[i] - pi0_true, 2)
+        
+        return summand/len(pi0_bootstrap)
+
+
+    def find_optimal_pi0(self, pvs, n_reps):
+        """Find the optimal pi0 according to Jiang and Doerge (2008)"""
+        # compute pi0 for each B
+        pi0_estimates = self.get_all_pi0s(pvs)
+        pi0_ave = np.mean(pi0_estimates)
+        b_set = [5, 10, 20, 50, 100]
+
+        # compute MSE for each pi0 estimate
+        mses = []
+
+        for pi0_estim, b_val in zip(pi0_estimates, b_set):
+            bootstraps = self.get_boostrap_pi0s(pvs, n_reps, b_val)
+            mses.append(self.get_mse(bootstraps, pi0_ave))
+
+        optimal_idx = mses.index(sorted(mses)[0])
+        print(mses)
+        print(pi0_estimates)
+        print(optimal_idx)
+        return pi0_estimates[optimal_idx]
