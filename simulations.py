@@ -38,8 +38,8 @@ class Simulator:
         fig, axs = plt.subplots(2,5, figsize=(12,5))
 
         for idx in range(10):
-            fins = ofs.cdf_finite_n(sam[idx], mu_, beta, 10-idx, 100)
-            asym = ofs.universal_cdf(sam[idx], mu_, beta, 10-idx)
+            fins = of.TEVDistribution().cdf_finite_n(sam[idx], mu_, beta, 10-idx, 100)
+            asym = of.TEVDistribution().cdf_asymptotic(sam[idx], mu_, beta, 10-idx)
             row, col = divmod(idx, 5)
             axs[row, col].scatter(fins, asym, c='#2D58B8', s=5)
             axs[row, col].plot([0,1], [0,1], c='grey')
@@ -77,13 +77,13 @@ class Simulator:
         ran = range(nop)
         mu_, beta = (0.138, 0.02)
         if mode == 'finite':
-            pars = list(map(lambda x: ofs.mle_fin_n(dat[nop-x-1], x, len(dat[nop-x-1])), ran))
+            pars = list(map(lambda x: of.FiniteNGumbelMLE(dat[nop-x-1], x, len(dat[nop-x-1])).run_mle(), ran))
         elif mode == 'asymptotic':
-            pars = list(map(lambda x: ofs.mle_mubeta(dat[nop-x-1], x), ran))
+            pars = list(map(lambda x: of.AsymptoticGumbelMLE(dat[nop-x-1], x).run_mle(), ran))
         #mm_pars = list(map(lambda x: ofs.mm_estimator(dat[nop-x-1], x), dat_r))
 
-        vals_fin = list(map(lambda x: ofs.cdf_finite_n(dat[nop-x-1], mu_, beta, x, 1000), ran))
-        vals_asy = list(map(lambda x: ofs.universal_cdf(dat[nop-x-1], mu_, beta, x), ran))
+        vals_fin = list(map(lambda x: of.TEVDistribution().cdf_finite_n(dat[nop-x-1], mu_, beta, x, 1000), ran))
+        vals_asy = list(map(lambda x: of.TEVDistribution().cdf_asymptotic(dat[nop-x-1], mu_, beta, x), ran))
         return pars, vals_fin, vals_asy
 
 

@@ -14,7 +14,7 @@ from sklearn.metrics import auc
 import order_formulae as of
 
 warnings.filterwarnings("ignore")
-ofs = of.Tools()
+gumbel_distribution = of.TEVDistribution()
 
 TH_N0 = 1000.
 TH_MU = 0.02*np.log(TH_N0)
@@ -90,7 +90,8 @@ class Analyze:
     def __get_bic(self, data, k, order, params):
         """calculate BIC for lower section of the distribution"""
         data = data[data < self.bic_cutoff]
-        log_like = ofs.log_like_mubeta(np.log(params), data, order)
+        # log_like = ofs.log_like_mubeta(np.log(params), data, order)
+        log_like = of.AsymptoticGumbelMLE(data, order).get_log_likelihood(np.log(params))
         bic = k*np.log(len(data)) - 2*log_like
         return bic
 
@@ -321,7 +322,7 @@ class Analyze:
         axes, kde = FFTKDE(bw=0.0005, kernel='gaussian').fit(data).evaluate(2**8)
         kde = kde/auc(axes, kde)
         trunk = len(axes[axes < self.bic_cutoff])
-        theory = ofs.pdf_mubeta(axes, mu_, beta, 0)
+        theory = gumbel_distribution.pdf(axes, mu_, beta, 0)
         err = 1000
         best_pi = 0
 
@@ -349,7 +350,7 @@ class Analyze:
         mu_, beta = mle_pars
         axes, kde = FFTKDE(bw=0.0005, kernel='gaussian').fit(data).evaluate(2**8)
         kde_auc = auc(axes, kde)
-        theory = ofs.pdf_mubeta(axes, mu_, beta, hit)
+        theory = gumbel_distribution.pdf(axes, mu_, beta, hit)
         theory_auc = auc(axes, theory)
         return abs(theory_auc - kde_auc)/kde_auc
 
@@ -390,8 +391,8 @@ class Analyze:
         mle_pars = self.__extract_pars(mle_par[idx], hit)
         mm_pars = self.__extract_pars(mm_par[idx], hit)
 
-        mm_qq = ofs.universal_cdf(data, mm_pars[0], mm_pars[1], hit+1)
-        mle_qq = ofs.universal_cdf(data, mle_pars[0], mle_pars[1], hit+1)
+        mm_qq = of.TEVDistribution().cdf_asymptotic(data, mm_pars[0], mm_pars[1], hit+1)
+        mle_qq = of.TEVDistribution().cdf_asymptotic(data, mle_pars[0], mle_pars[1], hit+1)
         emp_qq = np.arange(1, len(data)+1)/len(data)
         axs.scatter(mle_qq, emp_qq, color='#D65215', s=1)
         axs.scatter(mm_qq, emp_qq, color='#2CB199', s=1)
@@ -464,7 +465,7 @@ class Analyze:
     @staticmethod
     def __kde_plots(ax_plot, kde_sup, pars, hit, color):
         mu_, beta = pars
-        pdf_vals = ofs.pdf_mubeta(kde_sup, mu_, beta, hit)
+        pdf_vals = gumbel_distribution.pdf(kde_sup, mu_, beta, hit)
         ax_plot.plot(kde_sup, pdf_vals, color=color)
 
 
@@ -663,7 +664,7 @@ class Analyze:
             cur_tev = cur_tev[cur_tev > 0.01] #dommad
             len_ = len(cur_tev)
             cur_tev = cur_tev[int(len_*0.01):int(len_*0.99)]
-            params[hit-1] = ofs.mle_mubeta(cur_tev, hit)
+            params[hit-1] = of.AsymptoticGumbelMLE(cur_tev, hit).run_mle()
 
         return list(zip(*params))
 
@@ -688,7 +689,7 @@ class Analyze:
         for order in range(1,len(tev[0,:])):
             cur_scores = tev[:, order]
             cur_scores = cur_scores[cur_scores > 0]
-            cur_m1, cur_m2 = ofs.mm_estimator(cur_scores, order)
+            cur_m1, cur_m2 = of.MethodOfMoments().estimate_parameters(cur_scores, order)
             m_1.append(cur_m1)
             m_2.append(cur_m2)
         return m_1, m_2
@@ -866,7 +867,7 @@ class Analyze:
             old_mu1, old_beta, old_mu2, old_sigma, old_pi0 = params[charge]
 
             if charge in self.all_charges:
-                neg = ofs.pdf_mubeta(cur_tev, old_mu1, old_beta, 0)
+                neg = gumbel_distribution.pdf(cur_tev, old_mu1, old_beta, 0)
                 posit = st.norm.pdf(cur_tev, old_mu2, old_sigma)
                 pep = old_pi0*neg/(old_pi0*neg + (1-old_pi0)*posit)
             else:

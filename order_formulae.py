@@ -1,158 +1,74 @@
 """Distribution functions, parameter estimation codes"""
-from math import pi as PI
-from math import factorial as fact
+import math
 from functools import reduce
 import scipy.stats as st
 import numpy as np
 from sklearn.metrics import auc
-from scipy.optimize import minimize, newton
-from scipy.special import digamma, comb
+import scipy.optimize as opt
+from scipy import special
 from KDEpy import FFTKDE
+import matplotlib.pyplot as plt
 
-class Tools:
-    """maximum likelihood estimation and method of moments
-    for lower order statistics"""
 
-    def __init__(self):
-        pass
+
+class TEVDistribution:
+    """Methods related to Gumbel distribution"""
 
     @staticmethod
-    def pdf_mubeta(x_val, mu_, beta, alpha):
-        """PDF for TEV distribution of order alpha, mu-beta parametrization"""
+    def pdf(x_vals, location, scale, order_index):
+        """
+        PDF for TEV distribution of the specified order
+        """
 
-        beta += 1e-6
-        z_val = (x_val-mu_)/beta
-        denom = beta*fact(alpha)
-        pdf = (1/denom)*np.exp(-(alpha+1)*z_val - np.exp(-z_val))
+        scale = max(scale, 1e-6)
+        z_vals = (x_vals - location) / scale
+        denominator = scale * math.factorial(order_index)
+        pdf = (1 / denominator) * np.exp(-(order_index + 1) * z_vals - np.exp(-z_vals))
 
         return pdf
 
 
     @staticmethod
-    def log_like_mubeta(log_par, data, alpha):
-        """log-likelihood function with mu-beta parametrization"""
-
-        no_points = len(data)
-        mu_, beta = np.exp(log_par) + 1e-10
-        z_var  = (data - mu_)/beta
-        fac = fact(alpha)
-        eq1 = -no_points*np.log(beta*fac) - (alpha+1)*np.sum(z_var) - np.sum(np.exp(-z_var))
-
-        return eq1
-
-
-    def mle_mubeta(self, data, alpha):
-        """MLE using mu-beta parametrization for model of order alpha"""
-
-        res = minimize(
-        fun=lambda log_params, data, alpha: -self.log_like_mubeta(log_params, data, alpha),
-        x0=np.array([np.log(0.1), np.log(0.02)]),
-        args=(data,alpha,),
-           method='Nelder-Mead')
-        mu_, beta = np.exp(res.x)
-
-        return mu_, beta
-
-    # functions for simulation of estimation for finite N distribution forms
-
-    @staticmethod
-    def log_like_fin_n(log_par, data, alpha, no_c):
-        """log-likelihood for finite N form, N is the same for all data points"""
-
-        no_ = len(data)
-        alpha += 1
-        mu_, beta = np.exp(log_par) + 1e-10
-        z_var  = ((data - mu_)/beta)
-        cdf_d = 1 - (1/no_c)*np.exp(-z_var)
-        pdf_d = 1/(no_c*beta)*np.exp(-z_var)
-        re_ = no_c-alpha+1
-        te1 = no_*np.log(re_*comb(no_c, re_))
-        te2 = np.sum(np.log(pdf_d)) + (re_-1)*np.sum(np.log(cdf_d))
-        te3 = (no_c-re_)*np.sum(np.log(1-cdf_d))
-        eq1 = te1 + te2 + te3
-
-        return -eq1
-
-    def mle_fin_n(self, data, alpha, no_c):
-        """MLE using mu-beta parametrization for model of order alpha
-        no_c: number of candidates scored for each spectrum"""
-
-        res = minimize(
-        fun = self.log_like_fin_n,
-        x0=np.array([np.log(0.1), np.log(0.02)]),
-        args=(data, alpha, no_c),
-        method='Nelder-Mead')
-
-        mu_, beta = np.exp(res.x)
-
-        return mu_, beta
-
-
-
-    @staticmethod
-    def gumbel_new_ppf(pvalue, mu_, beta):
+    def gumbel_new_ppf(p_value, location, scale):
         """quantile function for Gumbel distribution"""
-        return mu_ - beta*np.log(-np.log(pvalue))
-
-
-    ### METHOD OF MOMENTS ###
-
-    def mm_estimator(self, data, k):
-        """MM estimates of mu and beta for order k"""
-
-        data = sorted(data)
-        euler_m = -digamma(1)
-        m_1 = self.first_moment(data)
-        m_2 = self.second_moment(data)
-        beta  = np.sqrt((m_2 - m_1**2 )/self.trigamma(k))
-        mu_ = m_1 - beta*(euler_m - self.harmonic(k))
-
-        return mu_, beta
-
-
-    def trigamma(self, k):
-        """trigamma function"""
-        return PI**2/6 - self.sum_squared(k+1)
+        return location - scale * np.log(-np.log(p_value))
 
 
     @staticmethod
-    def harmonic(k):
-        """harmonic number"""
-        squared = list(map(lambda x: 1/x, np.arange(1, k+1)))
-        return np.sum(squared)
+    def cdf_asymptotic(x_val, location, scale, k):
+        """
+        Cumulative Distribution Function (CDF) of the Truncated Exponential Value (TEV) distribution of order k
+        for the mu-beta parametrization.
 
+        Parameters:
+        - x_val (float or array-like): Values at which to evaluate the CDF.
+        - location (float): Location parameter of the TEV distribution.
+        - scale (float): Scale parameter of the TEV distribution.
+        - k (int): Order of the TEV distribution.
 
-    @staticmethod
-    def first_moment(data):
-        """raw first moment"""
-        return np.mean(data)
+        Returns:
+        - cdf (float or array-like): Calculated CDF values at the given x_val.
 
+        The function calculates the CDF of the TEV distribution of order k using the mu-beta parametrization. It employs
+        an asymptotic expansion approach for efficiency.
 
-    @staticmethod
-    def second_moment(data):
-        """raw second moment"""
-        squared = list(map(lambda x: x**2, data))
-        length = len(data)
-        if length == 0:
-            length = 1
-        return (1/length)*np.sum(squared)
+        Example usage:
+        ```python
+        x_values = np.linspace(0, 10, 100)
+        location_param = 2.0
+        scale_param = 1.5
+        order = 2
+        tev_cdf = cdf_asymptotic(x_values, location_param, scale_param, order)
+        ```
+        """
 
+        z_val = (np.array(x_val) - location) / scale
+        factorials = map(lambda m: np.exp(-m * z_val) / math.factorial(m), range(k + 1))
+        summed = reduce(lambda x, y: x + y, factorials)
+        cdf = np.exp(-np.exp(-z_val)) * summed
 
-    @staticmethod
-    def sum_squared(k):
-        """sum of squared values"""
-        squared = list(map(lambda x: 1/x**2, np.arange(1, k+1)))
-        return np.sum(squared)
-
-
-    @staticmethod
-    def universal_cdf(x_val, mu_, beta, k):
-        """CDF of TEV distribution of order k for mu-beta parametrization"""
-        z_val = (np.array(x_val)-mu_)/beta
-        factorials = map(lambda m: np.exp(-m*z_val)/fact(m), range(k+1))
-        summed = reduce(lambda x,y: x+y, factorials)
-        cdf = np.exp(-np.exp(-z_val))*summed
         return cdf
+
 
     @staticmethod
     def cdf_finite_n(x_val, mu_, beta, k, n_cand):
@@ -161,125 +77,469 @@ class Tools:
         fx_ = 1 - (1/n_cand)*np.exp(-z_val)
         summands = np.zeros(len(z_val))
         for idx in range(k+1):
-            cur_sum = comb(n_cand, n_cand-idx)*pow(fx_, n_cand-idx)*pow(1-fx_, idx)
+            cur_sum = special.comb(n_cand, n_cand-idx)*pow(fx_, n_cand-idx)*pow(1-fx_, idx)
             summands += cur_sum
         return summands
 
 
-class EM:
-    """expectation-maximization for two-components mixture: Gumbel + Gaussian"""
 
-    def __init__(self):
-        self.lows = Tools()
+class MLE:
+    """Maximum Likelihood Estimation for TEV distributions"""
 
-    def em_algorithm(self, data, fixed_pars=()):
-        """Executes EM algorithm for the data provided"""
+    def __init__(self, data, order):
+        self.data = data
+        self.order = order
+        self.initial_guess = np.array([np.mean(data), np.std(data)])
 
-        # initialization
-        left = data[data<0.15]
-        right = data[data>=0.15]
+    def get_log_likelihood(self):
+        pass
 
-        old_pi0 = len(left)/len(data)
-        old_mu1 = 0.1
-        old_beta = 0.02
-        old_mu2 = np.mean(right)
-        old_sigma = np.std(right)
-        old_mu2 = max(old_mu2, 0.25)
+    def run_mle(self):
+        """
+        Maximum Likelihood Estimation for TEV distribution
+        """
 
-        pi_j_0 = old_pi0*np.ones(len(data))
-        error = 100
-        fixed = 0
+        results = opt.minimize(
+            fun = self.get_log_likelihood,
+            x0 = self.initial_guess,
+            method = 'Nelder-Mead'
+            )
 
-        if fixed_pars != ():
-            old_mu1 = fixed_pars[0]
-            old_beta = fixed_pars[1]
-            print("fixed = 1")
-            fixed = 1
+        location, scale = np.exp(results.x)
+        return location, scale
+    
 
-        iteration = 0
-        # make sure EM can finish even if it gets stuck in a local optimum
-        while (error > 0.0001) and (iteration < 50):
+class AsymptoticGumbelMLE(MLE):
+    
+    def __init__(self, data, order):
+        super().__init__(data, order)
+    
 
-            if fixed == 0:
-                new_mu1, new_beta = self.__gumbel_params(data, pi_j_0)
-            else:
-                new_mu1, new_beta = old_mu1, old_beta
+    def get_log_likelihood(self, log_params):
+        """
+        Log-likelihood function for TEV distribution
+        """
 
-            new_mu2, new_sigma = self.__normal_params(data, 1-pi_j_0)
-            pi_j_0, new_pi_0 = self.__find_pi(data, old_mu1, old_beta, old_mu2, old_sigma, old_pi0)
+        num_points = len(self.data)
+        location, scale = np.exp(log_params) + 1e-10
+        z_values = (self.data - location) / scale
+        factorial_term = math.factorial(self.order)
+        likelihood = -num_points * np.log(scale * factorial_term) - (self.order + 1) * np.sum(z_values) - np.sum(np.exp(-z_values))
 
-            error = abs(old_pi0-new_pi_0)/old_pi0
-
-            old_mu1, old_beta = new_mu1, new_beta
-            old_mu2, old_sigma = new_mu2, new_sigma
-            old_pi0 = new_pi_0
-
-            print(old_mu1, old_beta, old_mu2, old_sigma, old_pi0)
-
-            iteration += 1
-
-        return old_mu1, old_beta, old_mu2, old_sigma, old_pi0
+        return -likelihood
 
 
-    # formulae to update the parameters
+class FiniteNGumbelMLE(MLE):
+    
+    def __init__(self, data, order, num_candidates):
+        super().__init__(data, order)
+        self.num_candidates = num_candidates
 
-    def __gumbel_params(self, data, p_i):
-        """get Gumbel parameters"""
 
-        _, guess_beta = self.lows.mm_estimator(data, 0)
-        #print(guess_beta)
+    def get_log_likelihood(self, log_params):
+        """
+        Log-likelihood function for the TEV distribution with finite N form,
+        where N is the same for all data points.
 
-        new_beta = newton(self.__find_beta, x0=guess_beta, args=(data, p_i))
-        new_mu = new_beta*np.log(np.sum(p_i)/np.sum(np.exp(-data/new_beta)*p_i))
-        return new_mu, new_beta
+        Parameters:
+        - log_params (array-like): Log-transformed parameters [log(location), log(scale)].
+
+        Returns:
+        - log_likelihood (float): Log-likelihood value.
+        """
+
+        num_data_points = len(self.data)
+        location, scale = np.exp(log_params) + 1e-10
+        z_values = (self.data - location) / scale
+
+        cdf_term = 1 - (1 / self.num_candidates) * np.exp(-z_values)
+        pdf_term = 1 / (self.num_candidates * scale) * np.exp(-z_values)
+        remaining_term = self.num_candidates - self.order
+
+        term1 = num_data_points * np.log(remaining_term * special.comb(self.num_candidates, remaining_term))
+        term2 = np.sum(np.log(pdf_term)) + (remaining_term - 1) * np.sum(np.log(cdf_term))
+        term3 = (self.num_candidates - remaining_term) * np.sum(np.log(1 - cdf_term))
+
+        log_likelihood = term1 + term2 + term3
+
+        return -log_likelihood
+
+
+
+
+class MethodOfMoments:
+
+    def __init__(self) -> None:
+        pass
+
+
+    def estimate_parameters(self, data, k):
+        """
+        Method of Moments (MM) estimates of location and scale parameters for the specified order.
+
+        Parameters:
+        - data (array-like): Input data.
+        - order (int): Order parameter.
+
+        Returns:
+        - location (float): Estimated location parameter.
+        - scale (float): Estimated scale parameter.
+        """
+
+        euler_m = -special.digamma(1)
+        first_moment = self._get_first_moment(data)
+        second_moment = self._get_second_moment(data)
+        scale  = np.sqrt((second_moment - first_moment**2 )/self._get_trigamma(k))
+        location = first_moment - scale * (euler_m - self._get_sum_inverse_squared(k))
+
+        return location, scale
+
+
+    def _get_trigamma(self, k):
+        """
+        Calculate the trigamma function.
+
+        Parameters:
+        - k (int): Input parameter.
+
+        Returns:
+        - trigamma_value (float): Trigamma function value.
+        """
+        return math.pi**(2/6) - self._get_sum_inverse_squared(k + 1)
+
 
     @staticmethod
-    def __find_beta(beta, x_val, p_i):
-        """find beta"""
-        mu_ = beta*np.log(np.sum(p_i)/np.sum(np.exp(-x_val/beta)*p_i))
-        return beta*np.sum(p_i) + np.sum( (x_val-mu_)*(np.exp((mu_-x_val)/beta)-1)*p_i)
+    def _get_first_moment(data):
+        """
+        Calculate the raw first moment.
 
-    @staticmethod
-    def __normal_params(data, p_i):
-        """new normal parameters"""
-        new_mu = np.sum(data*p_i)/np.sum(p_i)
-        new_var = np.sum(np.power(data-new_mu, 2)*p_i)/np.sum(p_i)
-        return new_mu, np.sqrt(new_var)
+        Parameters:
+        - data (array-like): Input data.
 
+        Returns:
+        - first_moment (float): Raw first moment.
+        """
 
-    @staticmethod
-    def __find_pi(data, mu_0, beta_0, mu_1, sigma_1, pi_0_old):
-        """find the updated pi_0"""
-
-        f_0 = st.gumbel_r.pdf(data, mu_0, beta_0)*pi_0_old
-        f_1 = st.norm.pdf(data, mu_1, sigma_1)*(1-pi_0_old)
-
-        pi_j_0 = f_0/(f_0 + f_1)
-        #pi_j_1 = 1 - pi_j_0
-        pi_0_new = np.mean(pi_j_0)
-        #pi_1_new = np.mean(pi_j_1)
-
-        return pi_j_0, pi_0_new
+        return np.mean(data)
 
 
     @staticmethod
-    def plot_em(axs, data, params):
-        """plot the results of expectation-maximization algorithm"""
+    def _get_second_moment(data):
+        """
+        Calculate the raw second moment.
 
-        axes, kde = FFTKDE(bw=0.0005, kernel='gaussian').fit(data).evaluate(2**8)
-        normed = auc(axes, kde)
-        kde0 = st.gumbel_r.pdf(axes, params[0], params[1])
-        kde1 = st.norm.pdf(axes, params[2], params[3])
+        Parameters:
+        - data (array-like): Input data.
 
-        #fig, ax = plt.subplots(figsize=(6,6))
+        Returns:
+        - second_moment (float): Raw second moment.
+        """
 
-        axs.fill_between(axes, kde/normed, color='green', alpha=0.3)
-        axs.plot(axes, kde/normed, color='green')
-        axs.plot(axes, params[4]*kde0, color='red')
-        axs.plot(axes, (1-params[4])*kde1, color='blue')
-        axs.set_ylim(0,)
-        axs.set_xlabel("TEV")
-        axs.set_ylabel("density")
+        squared_values = np.square(data)
+        length = max(1, len(data))
+        return (1 / length) * np.sum(squared_values)
 
-        #fig.tight_layout()
-        #fig.savefig(f"./graphs/{outname}.png", dpi=600, bbox_inches='tight')
+
+    @staticmethod
+    def _get_sum_inverse_squared(k):
+        """
+        Calculate the sum of squared values.
+
+        Parameters:
+        - k (int): Input parameter.
+
+        Returns:
+        - sum_squared_value (float): Sum of squared values.
+        """
+        squared_values = 1 / np.square(np.arange(1, k + 1))
+        return np.sum(squared_values)
+
+
+
+class EMAlgorithm:
+    """
+    Expectation-Maximization (EM) algorithm for estimating parameters of a mixture distribution.
+
+    This class implements the EM algorithm to estimate the parameters of a mixture distribution composed of a Gumbel
+    (negative) component and a Gaussian (positive) component. The algorithm iteratively maximizes the likelihood function
+    by updating the parameters in the Expectation (E) step and the Maximization (M) step.
+
+    Attributes:
+    - None
+
+    Methods:
+    - initialize_parameters(data): Initialize parameters for the EM algorithm based on the input data.
+    - run_em_algorithm(data, fixed_gumbel=False, fixed_gumbel_params=None, max_iterations=300, tolerance=1e-6): Execute the EM
+      algorithm to estimate parameters of the mixture distribution.
+    - find_peaks_and_dips(axes, kde): Find peaks and dips in TEV data.
+    - estimate_gumbel_params(data, weights=None): Estimate parameters for the Gumbel distribution.
+    - estimate_gaussian_params(data, weights=None): Estimate parameters for the Gaussian distribution.
+    - get_gumbel_neg_log_likelihood(params, data, weights): Calculate the negative log-likelihood for the Gumbel distribution.
+    - get_gaussian_neg_log_likelihood(params, data, weights): Calculate the negative log-likelihood for the Gaussian
+      distribution.
+
+    Example usage:
+    ```python
+    em_algo = EMAlgorithm()
+    initial_params = em_algo.initialize_parameters(data)
+    mu1, beta1, mu2, sigma2, pi0 = em_algo.em_algorithm(data)
+    ```
+    """
+
+    def __init__(self, data):
+        self.data = data
+
+
+    def initialize_parameters(self):
+        """
+        Initialize parameters for the EM algorithm.
+
+        Parameters:
+        - data (array-like): Input data.
+
+        Returns:
+        - mu1 (float): Initial location parameter for Gumbel component.
+        - beta1 (float): Initial scale parameter for Gumbel component.
+        - mu2 (float): Initial mean parameter for Gaussian component.
+        - sigma2 (float): Initial standard deviation for Gaussian component.
+        - pi0 (float): Initial proportion of data from Gumbel component.
+        """
+
+        # Find the peaks and dips
+        axes, kde = FFTKDE(bw=0.05, kernel='gaussian').fit(self.data).evaluate(2**8)
+        peaks, dips = self.find_peaks_and_dips(axes, kde)
+
+        if len(dips) == 0:
+            main_dip = np.median(self.data)
+        else:
+            main_dip = dips[max(0, int(len(dips / 2)) - 1)]
+
+        gumbel_data = self.data[self.data < main_dip]
+        gaussian_data = self.data[self.data >= main_dip]
+
+        # Initial parameter estimates
+        mu1 = peaks[0]
+        beta1 = np.std(gumbel_data)
+        mu2 = peaks[-1]
+        sigma2 = np.std(gaussian_data)
+        pi0 = len(gumbel_data) / len(self.data)
+
+        return mu1, beta1, mu2, sigma2, pi0
+
+
+    def run_em_algorithm(self, fixed_gumbel=False, fixed_gumbel_params=None, max_iterations=100, tolerance=1e-6):
+        """
+        Execute the EM algorithm to estimate parameters of the mixture distribution.
+
+        Parameters:
+        - data (array-like): Input data.
+        - fixed_gumbel (bool): If True, fix Gumbel component parameters.
+        - fixed_gumbel_params (tuple): Tuple of fixed Gumbel parameters if fixed_gumbel is True.
+        - max_iterations (int): Maximum number of iterations for EM algorithm.
+        - tolerance (float): Convergence tolerance.
+
+        Returns:
+        - mu1 (float): Estimated location parameter for Gumbel.
+        - beta1 (float): Estimated scale parameter for Gumbel.
+        - mu2 (float): Estimated mean parameter for Gaussian.
+        - sigma2 (float): Estimated standard deviation for Gaussian.
+        - pi0 (float): Estimated proportion of data from Gumbel component.
+        """
+
+        mu1, beta1, mu2, sigma2, pi0 = self.initialize_parameters()
+
+        if fixed_gumbel:
+            mu1, beta1 = fixed_gumbel_params
+
+        for iteration in range(max_iterations):
+            # E-step
+            pi1 = 1 - pi0
+            pdf_gumbel = st.gumbel_r.pdf(self.data, mu1, beta1) * pi0
+            pdf_gaussian = st.norm.pdf(self.data, mu2, sigma2) * pi1
+
+            # Calculate responsibilities
+            gamma = pdf_gumbel / (pdf_gumbel + pdf_gaussian)
+
+            # M-step
+            # Update parameters
+            if not fixed_gumbel:
+                mu1, beta1 = self.estimate_gumbel_params(gamma)
+
+            mu2, sigma2 = self.estimate_gaussian_params(1 - gamma)
+            pi0 = np.mean(gamma)
+
+            # Check for convergence
+            if np.abs(pi0 - gamma).max() < tolerance:
+                break
+
+        return mu1, beta1, mu2, sigma2, pi0
+
+
+    @staticmethod
+    def find_peaks_and_dips(axes, kde):
+        """
+        Find peaks in TEV data.
+
+        Parameters:
+        - data (array-like): TEV data.
+
+        Returns:
+        - indices (array): Indices of peaks in the data.
+        """
+
+        peaks = []
+        dips = []
+        for i in range(1, len(kde) - 1):
+            if kde[i] > kde[i - 1] and kde[i] > kde[i + 1]:
+                peaks.append(i)
+            if kde[i] < kde[i - 1] and kde[i] < kde[i + 1]:
+                dips.append(i)
+
+        return axes[peaks], axes[dips]
+
+
+    def estimate_gumbel_params(self, weights=None):
+        """
+        Estimate Gumbel distribution parameters.
+
+        Parameters:
+        - data (array-like): Input data.
+        - weights (array-like): Weights for each data point.
+
+        Returns:
+        - mu (float): Estimated location parameter for Gumbel.
+        - beta (float): Estimated scale parameter for Gumbel.
+        """
+
+        if weights is None:
+            weights = np.ones_like(self.data)
+
+        mu_init, beta_init = np.median(self.data), np.std(self.data) / np.sqrt(6)
+        params = opt.minimize(self.get_gumbel_neg_log_likelihood, (mu_init, beta_init), args=(weights),
+                          method='Nelder-Mead')
+        mu, beta = params.x
+
+        return mu, beta
+
+
+
+    def estimate_gaussian_params(self, weights=None):
+        """
+        Estimate Gaussian distribution parameters.
+
+        Parameters:
+        - data (array-like): Input data.
+        - weights (array-like): Weights for each data point.
+
+        Returns:
+        - mu (float): Estimated mean parameter for Gaussian.
+        - sigma (float): Estimated standard deviation for Gaussian.
+        """
+
+        if weights is None:
+            weights = np.ones_like(self.data)
+
+        mu_init, sigma_init = np.mean(self.data), np.std(self.data)
+        params = opt.minimize(self.get_gaussian_neg_log_likelihood, (mu_init, sigma_init), args=(weights),
+                          method='Nelder-Mead')
+        mu, sigma = params.x
+
+        return mu, sigma
+
+
+    def get_gumbel_neg_log_likelihood(self, params, weights):
+        """
+        Negative log-likelihood for Gumbel distribution.
+
+        Parameters:
+        - params (tuple): Gumbel parameters (mu, beta).
+        - data (array-like): Input data.
+        - weights (array-like): Weights for each data point.
+
+        Returns:
+        - neg_log_likelihood (float): Negative log-likelihood.
+        """
+
+        mu, beta = params
+        gumbel_pdf = st.gumbel_r.pdf(self.data, mu, beta)
+        neg_log_likelihood = -np.sum(weights * np.log(gumbel_pdf))
+
+        return neg_log_likelihood
+
+
+    def get_gaussian_neg_log_likelihood(self, params, weights):
+        """
+        Negative log-likelihood for Gaussian distribution.
+
+        Parameters:
+        - params (tuple): Gaussian parameters (mu, sigma).
+        - data (array-like): Input data.
+        - weights (array-like): Weights for each data point.
+
+        Returns:
+        - neg_log_likelihood (float): Negative log-likelihood.
+        """
+
+        mu, sigma = params
+        gaussian_pdf = st.norm.pdf(self.data, mu, sigma)
+        neg_log_likelihood = -np.sum(weights * np.log(gaussian_pdf))
+
+        return neg_log_likelihood
+
+
+    @staticmethod
+    def plot_em_results(em_results, data, out_name):
+        """
+        Plot the results of the Expectation-Maximization (EM) algorithm for a mixture distribution.
+
+        Parameters:
+        - em_results (tuple): Tuple containing the estimated parameters (mu1, beta1, mu2, sigma2, pi0) from the EM algorithm.
+        - data (array-like): Input data.
+        - out_name (str): The name to be used when saving the plot.
+
+        Returns:
+        - None: The function saves the plot as a PNG file.
+
+        The function visualizes the EM algorithm results by plotting the observed data distribution alongside the estimated
+        components of a mixture distribution. It displays the positive component (modeled as a Gaussian distribution),
+        the negative component (modeled as a Gumbel distribution), and the observed data distribution.
+
+        Parameters:
+        - em_results (tuple): A tuple containing the following parameters:
+            - mu1 (float): Location parameter for the negative (Gumbel) component.
+            - beta1 (float): Scale parameter for the negative (Gumbel) component.
+            - mu2 (float): Mean parameter for the positive (Gaussian) component.
+            - sigma2 (float): Standard deviation for the positive (Gaussian) component.
+            - pi0 (float): Proportion of data from the negative (Gumbel) component.
+
+        - data (array-like): Input data used in the EM algorithm.
+
+        - out_name (str): The base name (without extension) to be used when saving the plot. The function will save the plot as
+        a PNG file with the name '{out_name}.png'.
+
+        Note: The function uses the FFTKDE method to estimate the kernel density of the observed data.
+
+        """
+    
+        def get_fftkde(data, pi0):
+            axes, kde = FFTKDE(bw=0.0005, kernel='gaussian').fit(data).evaluate(2**8)
+            return axes, pi0 * kde
+
+        domain = np.linspace(0, 1, 300)
+        mu1, beta1, mu2, sigma2, pi0 = em_results
+
+        plt.style.use('tableau-colorblind10')
+        plt.rcParams.update({'font.size': 12, 'font.family': 'Helvetica'})
+
+        fig, ax = plt.subplots(figsize=(6, 5))
+        
+        ax.plot(domain, (1 - pi0) * st.norm.pdf(domain, mu2, sigma2), label='positive')
+        ax.plot(domain, pi0 * st.gumbel_r.pdf(domain, mu1, beta1), label='negative')
+        ax.plot(*get_fftkde(data, pi0), label='observed')
+        
+        ax.set_xlim(0, 0.8)
+        ax.set_xlabel("TEV")
+        ax.set_ylabel("density")
+        ax.legend()
+
+        fig.savefig(f"{out_name}.png", dpi=500, bbox_inches="tight")
