@@ -1,25 +1,88 @@
 """Estimation of distribution parameters based on lower-order TEV distributions"""
-from orderstats.utils import *
-from orderstats import stat as of
-from orderstats import parsers, plot
+import random
+import pandas as pd
+import scipy.stats as st
+import numpy as np
+from KDEpy import FFTKDE
+from sklearn.metrics import auc
+
+from . import stat as of
+from .plot import Plotting
+from . import parsers
 import scipy
+import time
 
+TH_N0 = 1000.
+TH_MU = 0.02 * np.log(TH_N0)
+TH_BETA = 0.02
 
+def timeit(func):
+    def wrapper(*args, **kwargs):
+        start_time = time.time()
+        result = func(*args, **kwargs)
+        end_time = time.time()
+        print(f"{func.__name__} took {end_time - start_time} seconds.")
+        return result
+    return wrapper
+
+def log_function_call(func):
+
+    def wrapper(*args, **kwargs):
+        #print(f"Calling {func.__name__} with args {args} and kwargs {kwargs}")
+        result = func(*args, **kwargs)
+        print(f"{func.__name__} returned {result}")
+        return result
+
+    return wrapper
 
 class LowerOrderEstimation:
     
-    def __init__(self, outname, bic_cutoff=0.17, lr_cutoff=(5,10)):
-        self.params_est = []
+    def __init__(self, outname):
         self.out = outname
-        self.len_correct = 0
-        self.bic_cutoff = bic_cutoff
-        self.tevs = []
-        self.lr_cutoff = lr_cutoff
-        self.all_charges = [2,3,4]
 
     
-    def run_estimation(self, input_path, pars_outname, engine='Tide', top_n=30):
-        """Estimate parameters of top null model using lower order TEV distributions"""
+    def run_estimation(self, input_path, engine):
+        """
+        Estimate parameters of the top null model using lower order TEV distributions.
+
+        Parameters
+        ----------
+        input_path : str
+            The path to the input file for parameter estimation.
+        pars_outname : str
+            The output name for saving the estimated parameters.
+        engine : str, optional
+            The TEV parser engine to use ('Tide' by default).
+
+        Returns
+        -------
+        optimal_params : dict
+            Dictionary containing the estimated optimal parameters for each charge.
+
+        Raises
+        ------
+        ValueError
+            If an unsupported or invalid engine is provided.
+
+        Notes
+        -----
+        This function performs parameter estimation for the top null model using lower order TEV distributions.
+        It utilizes a parser specified by the 'engine' parameter to read the input file.
+        The linear regression is performed on specified ranks of hits ('lr_cutoff').
+
+        The optimal parameters for top models of all charges are then estimated using 'find_optimal_top_models'.
+        The results are exported using 'export_parameters_for_peptide_prophet'.
+
+        Additionally, optional plotting is provided:
+        - 'plot_mubeta' for mu-beta combined and separate plots using both MLE and MM methods.
+        - 'plot_mubeta' for MLE and MM methods separately with linear regression and annotations.
+        - 'plot_mle_mm_lower_models' for MLE and MM lower-order models for each charge separately.
+
+        Examples
+        --------
+        >>> lowerorders = LowerOrderEstimation(out="example")
+        >>> optimal_params = lowerorders.run_estimation(input_path="your_input.csv", pars_outname="output_params", engine='Tide')
+        """
 
         try:
             parser_instance = getattr(parsers, f"{engine}Parser")()
@@ -29,6 +92,8 @@ class LowerOrderEstimation:
         parser_instance = getattr(parsers, f"{engine}Parser")()
 
         lower_order_df = parser_instance.parse(input_path)
+        lower_order_df['tev'] = self.calculate_tev(lower_order_df, -TH_BETA, TH_N0, engine)
+        # TODO: change it into dynamic selection of best cutoff limits based on R^2 of fitted LR
         lr_cutoff = (3, 9) #ranks of hits to include in linear regression fitting
 
         parameters_dict = ParameterEstimation().get_mle_mm_pars(lower_order_df, lr_cutoff)
@@ -36,25 +101,44 @@ class LowerOrderEstimation:
         
         # estimate parameters for top models of all charges
         optimal_params = self.find_optimal_top_models(lower_order_df, parameters_dict)
-        self.export_parameters_for_peptide_prophet(optimal_params, pars_outname)
+        self.export_parameters_for_peptide_prophet(optimal_params)
 
 
         # plotting should be optional, so it will be at the end
 
         # plotting mu-beta combined and separate
-        plot_object = plot.Plotting(self.out)
+        plot_object = Plotting(self.out)
         plot_object.plot_mubeta(parameters_dict, methods=['mle', 'mm'])
         plot_object.plot_mubeta(parameters_dict, methods=['mle'], linear_regression=True, annotation=True)
         plot_object.plot_mubeta(parameters_dict, methods=['mm'], linear_regression=True, annotation=True)
 
         # plot MLE- and MM- lower-order models for each charge separately
-        plot.Plotting().plot_mle_mm_lower_models(lower_order_df, parameters_dict)
+        # plot_object.plot_mle_mm_lower_models(lower_order_df, parameters_dict)
 
-        return optimal_params
+        return optimal_params, parameters_dict
 
 
     @staticmethod
-    def export_parameters_for_peptide_prophet(params_est, params_out_name):
+    def calculate_tev(df, par_a, par_n0, engine):
+        """
+        Calculate the log-transformed e-value (TEV) score based on the given parameters.
+
+        Parameters:
+        - df (pd.DataFrame): Input DataFrame containing relevant information.
+        - par_a (float): The 'a' parameter used in TEV score calculation.
+        - par_n0 (float): The 'N0' parameter used in TEV score calculation.
+
+        Returns:
+        np.ndarray: An array containing TEV scores for each row in the DataFrame.
+        """
+
+        if engine == 'Comet':
+            return par_a * np.log(df['expect'] / par_n0)
+        else:
+            return par_a * np.log(df['p-value'] * df['num_candidates'] / par_n0)
+        
+
+    def export_parameters_for_peptide_prophet(self, params_est):
         """export params to txt for modified PeptideProphet (mean & std)"""
 
         params = pd.DataFrame.from_dict(params_est, orient='index', columns=['location', 'scale'])
@@ -71,7 +155,7 @@ class LowerOrderEstimation:
         final_params = pd.concat([params, to_concat], axis=0, ignore_index=False)
         final_params.sort_index(inplace=True)
 
-        final_params.to_csv(f"{params_out_name}.txt", sep=" ", header=None, index=None)
+        final_params.to_csv(f"pp_params_{self.out}.txt", sep=" ", header=None, index=None)
 
 
 
@@ -152,7 +236,7 @@ class LowerOrderEstimation:
 
         # we need to roughly cut off the upper portion of the mixture
         main_dip_cutoff = self.find_main_dip(top_tevs)
-        sel_tevs = top_tevs[top_tevs < main_dip_cutoff]
+        sel_tevs = top_tevs[top_tevs < 0.21] # TODO: improve this
 
         for method in methods:
             param_df, linreg = parameters_dict[method]
@@ -172,22 +256,17 @@ class LowerOrderEstimation:
         return optimal_results, best_key
                 
 
-
-    def find_optimal_top_models(self, df, parameters_dict, plot=False):
+    @timeit
+    def find_optimal_top_models(self, df, parameters_dict, plot=True):
         """estimate parameters of top models using lower order distributions"""
 
         optimal_params = {}
 
-        # mode_dict  = {0: "MLE LR", 1: "MLE mean", 2: "MM LR", 3: "MM mean"}
-
         for charge in parameters_dict:
 
             cur_parameters = parameters_dict[charge] # MLE and MM parameters for given charge
-
-            # extract top hits for the selected charge state
-            # TODO: remove the top section of the mixture for better fitting, separate function
-            top_tevs = df[df['charge'] == charge]['tev']
-            top_tevs = top_tevs[top_tevs > 0.01] # dommad: don't count scores at 0 and below
+            top_tevs = df[(df['charge'] == charge) & (df['hit_rank'] == 1)]['tev'].values
+            top_tevs = top_tevs[top_tevs > 0.01] # don't count scores at 0 and below, they are artefacts
 
             optim_results, best_key = self.find_best_estimation_method(top_tevs, cur_parameters)
             cur_optimal_params = optim_results[best_key][0]
@@ -195,14 +274,13 @@ class LowerOrderEstimation:
         
         # plotting - optional
         if plot:
-            self.plot_top_model_with_pi0(top_tevs, optimal_params) # for plotting
+            Plotting(self.out).plot_top_model_with_pi0(df, optimal_params) # for plotting
         
         return optimal_params
     
 
-
     @staticmethod
-    def find_optimal_pars(data, order, beta=0.02, linreg=None):
+    def find_optimal_pars(data, order, beta=None, linreg=None):
         """
         Maximum Likelihood Estimation for TEV distribution
         """
@@ -215,6 +293,7 @@ class LowerOrderEstimation:
             mu = max(params[0], 1e-6)  # Extract mu from the parameters
             if linreg:
                 beta = mu * linreg.slope + linreg.intercept
+                beta = max(beta, 0.001)
 
             logged_params = np.log(np.array([mu, beta]))
 
@@ -224,12 +303,12 @@ class LowerOrderEstimation:
         
         initial_guess = np.mean(data)
         bounds = [(0.1 * initial_guess, 1.5 * initial_guess)]
+
         objective_function = lambda a, b, c, d, e: get_log_likelihood(a, b, c, d, e)
 
         results = scipy.optimize.minimize(
             fun = objective_function,
             x0 = np.array([initial_guess]),
-            #x0 = initial_guess,
             args=(data, order, beta, linreg,),
             method='L-BFGS-B',
             bounds=bounds   
@@ -239,47 +318,14 @@ class LowerOrderEstimation:
         
         if linreg:
             opt_beta = opt_mu * linreg.slope + linreg.intercept
+            if opt_beta < 0:
+                return (opt_mu, opt_beta), 10 # is beta negative, it's useless
         else:
             opt_beta = beta
         
         return (opt_mu, opt_beta), results.fun
     
 
-
-    def plot_top_model_with_pi0(self, data, pars, plot=True):
-        """find pi0 estimates for plotting the final models"""
-
-        # TODO: now pars is a dict: charge: (mu, beta)
-        mu, beta = pars
-        axes, kde = FFTKDE(bw=0.0005, kernel='gaussian').fit(data).evaluate(2**8)
-        kde = kde/auc(axes, kde)
-        trunk = len(axes[axes < self.bic_cutoff])
-        theory = of.TEVDistribution().pdf(axes, mu, beta, 0)
-        err = 1000
-        best_pi = 0
-
-        for pi_0 in np.linspace(0, 1, 500):
-            new_err = abs(auc(axes[:trunk], kde[:trunk]) - auc(axes[:trunk], pi_0*theory[:trunk]))
-            if new_err < err:
-                best_pi = pi_0
-                err = new_err
-
-        num_charges = len(pars)
-        fig, axs = plt.subplots(1, num_charges, figsize=(2 * num_charges, 2))
-
-        if plot:
-            axs.fill_between(axes, kde, alpha=0.2, color='#2CB199')
-            axs.plot(axes, kde, color='#2CB199')
-            axs.plot(axes, best_pi*theory, color='#D65215', linestyle='-')
-            axs.set_xlim(0.0, 0.6)
-            axs.set_ylim(0,20)
-            axs.set_xlabel("TEV")
-            axs.set_ylabel("density")
-
-        fig.tight_layout()
-        fig.savefig(f"./graphs/{self.out}_alt_top_models.png", dpi=600, bbox_inches="tight")
-
-    
     def get_bic_for_lower_models(self, lower_order_df, parameters_dict, charge, plot=False):
         """Calculate BIC for the lower-order models"""
         hit_ranks = set(lower_order_df['hit_rank'])
@@ -296,7 +342,7 @@ class LowerOrderEstimation:
             bic_diffs.append(cur_bic_diff)
 
             if plot:
-                self.plot_bic_diffs(bic_diffs, charge)
+                Plotting(self.out).plot_bic_diffs(bic_diffs, charge)
 
 
     def calculate_mle_mm_bic_diff(self, tevs, hit_rank, parameters_dict, k=2):
@@ -351,6 +397,40 @@ class ParameterEstimation:
         linreg_results = st.linregress(mu_values, beta_values)
 
         return linreg_results
+    
+    @log_function_call
+    def get_best_linreg(self, param_df):
+        """Fit linear regression to mu and beta values 
+        from lower orders and return the results for the best lr_cutoff"""
+
+        x, y, n_size = 3, len(param_df.columns), 5  # Adjust the values as needed
+        range_values = range(x, y)
+        lr_cutoff_slices = [range_values[i:i+n_size] for i in range(len(range_values) - n_size + 1)]
+
+
+        best_linreg_results = None
+        best_lr_cutoff = None
+        max_pearson_r = -1  # Initialize with a value less than any possible Pearson's R
+
+        # Iterate over lr_cutoff values
+        for lr_cutoff in lr_cutoff_slices:
+            # Slice columns within the specified cutoff range
+            selected_columns = param_df.columns.isin(lr_cutoff)
+            selected_df = param_df.loc[:, selected_columns]
+    
+            mu_values = selected_df.loc['location', :].values
+            beta_values = selected_df.loc['scale', :].values
+
+            # Fit linear regression
+            linreg_results = st.linregress(mu_values, beta_values)
+
+            # Check if the current linear regression has a higher Pearson's R
+            if abs(linreg_results.rvalue) > max_pearson_r:
+                max_pearson_r = abs(linreg_results.rvalue)
+                best_linreg_results = linreg_results
+                best_lr_cutoff = lr_cutoff
+
+        return best_linreg_results
 
 
     @staticmethod
@@ -376,7 +456,7 @@ class ParameterEstimation:
         params_df = pd.DataFrame.from_records(params, index=['location', 'scale'])
         return params_df
 
-    
+
     def get_mle_mm_pars(self, df, lr_cutoff):
         """calculate MLE and MM parameters using the data"""
         available_charges = set(df['charge'])
@@ -389,7 +469,8 @@ class ParameterEstimation:
 
             for method in methods:
                 method_params = self.find_pars(sel_df, method=method)
-                method_lr = self.get_linreg(method_params, lr_cutoff)
+                #method_lr = self.get_linreg(method_params, lr_cutoff)
+                method_lr = self.get_best_linreg(method_params)
                 charge_dict[method] = (method_params, method_lr)
 
             output_dict[charge] = charge_dict

@@ -130,7 +130,7 @@ class MethodOfMoments:
         euler_m = -special.digamma(1)
         first_moment = self._get_first_moment(data)
         second_moment = self._get_second_moment(data)
-        scale  = np.sqrt((second_moment - first_moment**2 )/self._get_trigamma(k))
+        scale  = np.sqrt((second_moment - pow(first_moment, 2) )/self._get_trigamma(k))
         location = first_moment - scale * (euler_m - self._get_sum_inverse_squared(k))
 
         return location, scale
@@ -146,7 +146,7 @@ class MethodOfMoments:
         Returns:
         - trigamma_value (float): Trigamma function value.
         """
-        return math.pi**(2/6) - self._get_sum_inverse_squared(k + 1)
+        return math.pi**2 / 6 - self._get_sum_inverse_squared(k + 1)
 
 
     @staticmethod
@@ -324,7 +324,7 @@ class EMAlgorithm:
         return mu1, beta1, mu2, sigma2, pi0
 
 
-    def run_em_algorithm(self, fixed_gumbel=False, fixed_gumbel_params=None, max_iterations=100, tolerance=1e-6):
+    def run_em_algorithm(self, fixed_gumbel=False, fixed_gumbel_params=None, max_iterations=30, tolerance=1e-6):
         """
         Execute the EM algorithm to estimate parameters of the mixture distribution.
 

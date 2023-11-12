@@ -1,13 +1,23 @@
-from orderstats.utils import *
-import orderstats.stat as of
+import matplotlib.pyplot as plt
+import numpy as np
+from KDEpy import FFTKDE
+from . import stat as of
 
 
+TH_N0 = 1000.
+TH_MU = 0.02 * np.log(TH_N0)
+TH_BETA = 0.02
 
 class Plotting:
     """Plotting functionalities for the analysis of lower-order models"""
 
     def __init__(self, out_name) -> None:
         self.out_name = out_name
+
+        plt.style.use('ggplot')
+        plt.rcParams.update({'font.size': 13, 'font.family': 'Helvetica'})
+
+
 
 
     def plot_mubeta(self, parameters_dict, methods = ['mle', 'mm'], **kwargs):
@@ -19,7 +29,7 @@ class Plotting:
 
         charges = parameters_dict.keys()
         num_charges = len(charges)
-        fig, axs = plt.subplots(1, num_charges, figsize=(9, num_charges))
+        fig, axs = plt.subplots(1, num_charges, figsize=(num_charges * 4, 4))
 
         for idx, charge in enumerate(charges):
             cur_charge = parameters_dict[charge]
@@ -37,6 +47,7 @@ class Plotting:
 
             axs[idx].set_xlabel(r"$\mu$")
             axs[idx].set_ylabel(r"$\beta$")
+            axs[idx].set_title(f"charge {charge}")
 
         fig.tight_layout()
         fig.savefig(f"./{self.out_name}_mubeta_params_annot_{kwargs.get('annotation')}_lr_{kwargs.get('linear_regression')}_{methods}.png", dpi=600)
@@ -50,13 +61,13 @@ class Plotting:
         """
         x_range = np.array([min(TH_MU, min(xs)), max(xs)])
         axes.plot(x_range, x_range * linreg.slope + linreg.intercept)
-        axes.scatter([TH_MU], [TH_BETA], color=color, marker='*')
+        axes.scatter([TH_MU], [TH_BETA], marker='*', s=20, color='orange')
 
 
     @staticmethod
     def annotation(axes, x_text, y_text, color):
         """Add text annotation with the hit rank"""
-        offset = 3
+        offset = 2
         for idx, pair in enumerate(zip(x_text, y_text)):
             axes.annotate(idx + offset, (pair[0], pair[1]-0.0002), color=color)
 
@@ -152,6 +163,36 @@ class Plotting:
         axs.set_ylim(0,)
 
 
+
+    def plot_top_model_with_pi0(self, df, optimal_params):
+        """find pi0 estimates for plotting the final models"""
+
+        num_charges = len(optimal_params)
+        colors = ('#2CB199', '#2CB199', '#D65215')
+        fig, axs = plt.subplots(1, num_charges, figsize=(5 * num_charges, 5))
+
+
+        for idx, charge in enumerate(optimal_params):
+
+            top_tevs = df[(df['charge'] == charge) & (df['hit_rank'] == 1) ]['tev'].values
+            mu, beta = optimal_params[charge]
+
+            # get a rough approximation of pi0 for plotting only
+            pi0 = len(top_tevs[top_tevs < 0.17]) / len(top_tevs)
+            xs, kde_observed = FFTKDE(bw=0.01, kernel='gaussian').fit(top_tevs).evaluate(2**8)
+            pdf_fitted = of.TEVDistribution().pdf(xs, mu, beta, order_index=0)
+
+            axs[idx].fill_between(xs, kde_observed, alpha=0.2, color=colors[0], label='observed')
+            axs[idx].plot(xs, kde_observed, color=colors[1])
+            axs[idx].plot(xs,  pi0 * pdf_fitted, color=colors[2], linestyle='-', label='fitted')
+            axs[idx].set_xlim(0.0, 0.6)
+            axs[idx].set_ylim(0,)
+            axs[idx].set_xlabel("TEV")
+            axs[idx].set_ylabel("density")
+
+        fig.tight_layout()
+        fig.savefig(f"./{self.out_name}_fitted_top_models.png", dpi=600, bbox_inches="tight")
+
     ### plotting for BIC ###
 
     def plot_bic_diffs(self, bic_diffs, charge):
@@ -160,9 +201,9 @@ class Plotting:
         fig, axs = plt.subplots(figsize=(10, 5), constrained_layout=True)
         color = '#2D58B8'
 
-        support = np.arange(len(bic_diffs)) + 2 # we start from 2nd hit
-        axs.scatter(support, bic_diffs, color=color)
-        axs.plot(support, bic_diffs, color=color)
+        xs = np.arange(len(bic_diffs)) + 2 # we start from 2nd hit
+        axs.scatter(xs, bic_diffs, color=color)
+        axs.plot(xs, bic_diffs, color=color)
 
         axs.set_xlabel("hit_rank")
         axs.set_ylabel("relative BIC difference [%]")
