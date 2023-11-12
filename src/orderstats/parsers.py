@@ -1,5 +1,6 @@
 """Module for processing data from spectral libraries in format .sptxt"""
 import re
+from abc import ABC, abstractmethod
 from collections import namedtuple
 import numpy as np
 import pandas as pd
@@ -10,7 +11,7 @@ FILE_FORMATS = ['pep.xml', 'txt', 'mzid']
 SEARCH_ENGINES = ['Comet', 'SpectraST', 'Tide', 'MSFRagger', 'MSGF+']
 
 
-class ProteomicsDataParser:
+class ProteomicsDataParser(ABC):
     def __init__(self):
         self.engine = ""
 
@@ -28,10 +29,11 @@ class ProteomicsDataParser:
         return getattr(self, f"parse_{file_ext}")(file_name)
 
 
+    @abstractmethod
     def update_headers_pepxml(self, headers):
         pass
 
-
+    @abstractmethod
     def add_modification_data_pepxml(self, spectrum_query, ns):
         modification_list = spectrum_query.findall('.//pepXML:modification_info', namespaces=ns)
         
@@ -144,7 +146,8 @@ class CometParser(ProteomicsDataParser):
         # Define column renaming logic specific to Comet
         columns = {'start_scan': 'scan',
                     'peptide': 'sequence',
-                    'num_matched_peptides': 'num_candidates'}
+                    'num_matched_peptides': 'num_candidates',
+                    'assumed_charge': 'charge'}
         return columns
 
     def update_headers_pepxml(self, headers):
@@ -196,6 +199,7 @@ class TideParser(ProteomicsDataParser):
     def rename_columns(self):
         # Define column renaming logic specific to Tide
         columns = {'exact p-value': 'p-value',
+                   'exact_pvalue': 'p-value',
                     'distinct matches/spectrum': 'num_candidates',
                     'xcorr rank': 'hit_rank'}
         
