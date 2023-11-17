@@ -1,112 +1,33 @@
 """Full analysis of pepxml file using lower order statistics"""
-from utils import *
-import src.orderstats.stat as of
-import parsers
-from plot import Plotting
+from .utils import *
+from . import parsers
+from .initializer import Initializer
+from .estimators import *
+from .optimization_modes import *
 
 
+def run_estimation(engine, input_file, cutoff_filter, df_processor, init: Initializer):
+    # parsing
+    try:
+        parser_instance = getattr(parsers, f"{engine}Parser")()
+    except AttributeError:
+        raise ValueError(f"Unsupported or invalid engine: {engine}")
 
+    filter_score = 'tev'
 
-class Parsers:
+    parser_instance = init.initialize_parser(engine)
+    df = parser_instance.parse(input_file)
+    df['tev'] = calculate_tev(df, -TH_BETA, TH_N0, engine)
 
-    def __init__(self) -> None:
-        pass
-        # TODO: implement parser for MSGF and refactor all codes
-        # so that these functions can be replaced by the general parsers
+    parameter_estimators = init.initialize_parameter_estimators(AsymptoticGumbelMLE, MethodOfMomentsEstimator)
+    para_init = init.initialize_param_processing(df, df_processor, filter_score)
 
- ########## PARSING TIDE AND COMET ####################
+    param_data = para_init.process_parameters_into_charge_dicts(parameter_estimators)
 
-    def __parse_tide_comet(self, paths, top_n, option='Tide', decoy=False):
-        """fast parsing of pepXML results from Tide or Comet"""
-        data = deque()
+    optimal_finder = init.initialize_optimal_models_finder(param_data, filter_score)
+    sel_find_modes = init.initialize_optimization_modes(LinearRegressionMode, MeanBetaMode)
 
-        for path in paths:
-            cur_file = pepxml.read(path)
-            psms = filter(lambda x: 'search_hit' in x.keys(), cur_file)
-            has_top_n = filter(lambda x: len(x['search_hit']) == top_n, psms)
+    optimal_results = optimal_finder.find_parameters_for_best_estimation_optimization(df, df_processor, cutoff_filter, sel_find_modes)
+    best_params = optimal_finder.get_charge_best_combination_dict(optimal_results)
 
-            if decoy:
-                has_top_n = filter(lambda x: 'DECOY' in x['search_hit'][0]['proteins'][0]['protein'], has_top_n)
-
-            if option == 'Tide':
-                scores = list(map(self.__get_tide_scores, has_top_n))
-            elif option == 'Comet':
-                scores = list(map(self.__get_comet_scores, has_top_n))
-
-            data += scores
-
-        tevs, charges = list(zip(*data))
-        tevs = np.nan_to_num(np.array(tevs))
-        return tevs, np.array(charges)
-
-
-    def __get_tide_scores(self, spectrum):
-        """extract TEV scores from Tide search results"""
-        charge = spectrum['assumed_charge']
-        scores = map(self.__get_tide_tev,
-                    spectrum['search_hit'])
-        return list(scores), charge
-
-
-    @staticmethod
-    def __get_tide_tev(hit):
-        """convert Tide's p-value to TEV"""
-        num_match = hit['num_matched_peptides']
-        p_val = hit['search_score']['exact_pvalue']
-        return -TH_BETA*np.log(max(p_val, 10e-16)*num_match/TH_N0)
-
-
-    @staticmethod
-    def __get_comet_scores(row):
-        """extract TEV scores from Comet search results"""
-        scores = map(lambda x:
-                    -TH_BETA*np.log(x['search_score']['expect']/TH_N0),
-                    row['search_hit'])
-        charge = row['assumed_charge']
-        return list(scores), charge
-
-
-    def __parse_msgf_tsv(self, input_path):
-        """Parse MSGF+ search results"""
-        data = pd.read_csv(input_path, sep='\t')
-        scans = set(data.ScanNum)
-        tevs = list(map(fu.partial(self.__get_msgf_tsv_tev, dat=data, no_hits=30), scans))
-        charges = list(map(lambda x: data[data.ScanNum == x]['Charge'].values[0], scans))
-        return np.array(tevs), np.array(charges)
-
-
-    @staticmethod
-    def __get_msgf_tsv_tev(scan, dat, no_hits):
-        """parse MSGF+ scores fast"""
-        cur_scores = [0,]*no_hits
-        cur_hits = set(dat[dat.ScanNum == scan]['EValue'])
-        cur_hits = np.array(sorted(list(cur_hits)))
-        cur_hits = -TH_BETA*np.log(cur_hits/TH_N0)
-        if len(cur_hits) > no_hits:
-            return cur_hits[:no_hits]
-        cur_scores[:len(cur_hits)] = cur_hits
-        return cur_scores
-
-
-    @staticmethod
-    def __get_msgf_mzid_tev(spec):
-        """Extract TEVs from MSGF+ output (mzid)"""
-        charge = spec['SpectrumIdentificationItem'][0]['chargeState']
-        tevs = list(map(lambda x: -TH_BETA*np.log(x['MS-GF:EValue']/TH_N0),
-                    spec['SpectrumIdentificationItem']))
-        empty_tevs = np.zeros(30)
-        max_lim = min(30,len(tevs))
-        empty_tevs[:max_lim] = sorted(tevs, reverse=True)[:max_lim]
-        return empty_tevs, charge
-
-
-    def __parse_msgf_mzid(self, input_path):
-        """Extract MSGF+ scores (mzid)"""
-        # TODO: try not to use pyteomics and have my own mzid parser based on xml
-        data = mzid.read(input_path)
-        results = list(map(self.__get_msgf_mzid_tev, data))
-        tevs = [x[0] for x in results]
-        charges = [x[1] for x in results]
-        return np.array(tevs), np.array(charges)
-
-
+    return best_params

@@ -1,6 +1,9 @@
 """Simulations to support assumptions made in the study"""
-from utils import *
+import matplotlib.pyplot as plt
+import scipy.stats as st
+import numpy as np
 import orderstats.stat as of
+from .utils import *
 ofs = of.Tools()
 
 

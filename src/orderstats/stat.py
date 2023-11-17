@@ -1,13 +1,11 @@
 """Distribution functions, parameter estimation codes"""
 import math
 from functools import reduce
-import scipy.stats as st, scipy.optimize as opt
-from scipy import special
+from scipy import special, stats as st, optimize as opt
 import numpy as np
 from KDEpy import FFTKDE
 import matplotlib.pyplot as plt
-
-
+from .utils import *
 
 class TEVDistribution:
     """Methods related to Gumbel distribution"""
