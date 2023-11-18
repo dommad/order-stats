@@ -1,6 +1,6 @@
 from abc import ABC, ABCMeta, abstractmethod
-from . import stat
 from .utils import StrClassNameMeta
+from . import stat
 
 
 class ParametersEstimatorMeta(StrClassNameMeta, ABCMeta):

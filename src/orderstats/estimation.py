@@ -1,16 +1,14 @@
 """Estimation of distribution parameters based on lower-order TEV distributions"""
+from typing import List
 import random
 import pandas as pd
 import numpy as np
-from .utils import *
-from . import parsers
-from typing import List
 from dataclasses import dataclass
+from .utils import *
 from .estimators import ParametersEstimator
-from .optimization_modes import ParameterOptimizationMode, LinearRegressionMode, MeanBetaMode
-from .exporter import Exporter
-from .cutoff_finder import CutoffFinder, MainDipCutoff
-from .estimators import MethodOfMomentsEstimator, AsymptoticGumbelMLE
+from .optimization_modes import ParameterOptimizationMode
+from .cutoff_finder import CutoffFinder
+# from .exporter import Exporter
 
 
 @dataclass
@@ -28,9 +26,9 @@ class DataFrameProcessor:
         pass
 
     def get_available_hits(self, df):
-        available_hits = set(df['hit_rank'])
-        available_hits.discard(1) # skip first hit since it's a mixture
-        return available_hits
+        all_hit_ranks = df.drop_duplicates('hit_rank')['hit_rank'].values
+        all_hit_ranks = all_hit_ranks[all_hit_ranks != 1] # skip top hit since it may contain some correct IDs
+        return all_hit_ranks
     
 
     def extract_selected_hit(self, df, hit):
@@ -40,17 +38,19 @@ class DataFrameProcessor:
         #hit_df = df_hit[df_hit[filter_score] > 0.01][filter_score] # dommad
         return df_hit
     
+    def extract_hit_scores(self, df, score, hit):
+        return df.loc[df['hit_rank'].values == hit, score].values
+    
  
     def get_available_charges(self, df):
-        return set(df['charge'])
+        return df.drop_duplicates('charge')['charge'].values
     
 
     def get_psms_by_charge(self, df, charge):
-        psms_by_charge = df[df['charge'] == charge].copy()
-        return psms_by_charge
+        return df[df['charge'].values == charge]
     
-    def get_scores_below_threshold(self, df, filter_score_name, score_threshold):
-        return df[df[filter_score_name] < score_threshold][filter_score_name].values
+    def get_scores_below_threshold(self, df, score_name, threshold):
+        return df.loc[df[score_name].values < threshold, score_name].values
 
 
 class OptimalModelsFinder:
@@ -80,7 +80,7 @@ class OptimalModelsFinder:
                 
                 for f_mode in finding_modes:
                     f_mode_name = str(f_mode)
-                    current_opt_params = f_mode(param_df).find_optimal_parameters(scores_below_cutoff, order=0) # TODO: make order flexible
+                    current_opt_params = f_mode(param_df).find_optimal_parameters(scores_below_cutoff, hit_rank=1) # TODO: make order flexible
                     charge_dict[(p_estimator_name, f_mode_name)] = current_opt_params
             
             optimal_results[charge] = charge_dict
@@ -100,7 +100,6 @@ class OptimalModelsFinder:
 
 
 
-
 class ParametersProcessing:
     
     def __init__(self, df, df_processor: DataFrameProcessor, filter_score: str) -> None:
@@ -115,7 +114,7 @@ class ParametersProcessing:
 
         available_charges = self.df_processor.get_available_charges(self.df)
         output_dict = {}
-
+        
         for charge in available_charges:
             charge_dict = {}
             df_by_charge = self.df_processor.get_psms_by_charge(self.df, charge)
@@ -125,6 +124,7 @@ class ParametersProcessing:
                 charge_dict[str(p_estimator)] = method_params
 
             output_dict[charge] = charge_dict
+
 
         return ParametersData(
             output_dict=output_dict,
@@ -138,9 +138,9 @@ class ParametersProcessing:
         
         available_hits = self.df_processor.get_available_hits(df_by_charge)
         parameters = {}
-
+    
         for hit in available_hits:
-            hit_scores = self.df_processor.extract_selected_hit(df_by_charge, hit)[self.filter_score]
+            hit_scores = self.df_processor.extract_hit_scores(df_by_charge, self.filter_score, hit)
             hit_parameters = parameter_estimator(hit_scores, hit).estimate()
             parameters[hit] = hit_parameters
     

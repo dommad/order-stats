@@ -1,19 +1,23 @@
 """Module for processing data from spectral libraries in format .sptxt"""
 import re
 from abc import ABC, abstractmethod
-from collections import namedtuple
 import numpy as np
 import pandas as pd
 import xml.etree.ElementTree as ET
-import csv
+from .utils import _is_numeric
 
 FILE_FORMATS = ['pep.xml', 'txt', 'mzid']
 SEARCH_ENGINES = ['Comet', 'SpectraST', 'Tide', 'MSFRagger', 'MSGF+']
 
 
-class ProteomicsDataParser(ABC):
-    def __init__(self):
-        self.engine = ""
+class PSMParser(ABC):
+    def __init__(self, decoy_tag='decoy'):
+        self.decoy_tag = decoy_tag
+
+
+    @abstractmethod
+    def rename_columns(self):
+        pass
 
 
     def parse(self, file_name):
@@ -24,76 +28,66 @@ class ProteomicsDataParser(ABC):
         elif after_dots[-1] in FILE_FORMATS:
             file_ext = after_dots[-1]
         else:
-            raise ValueError(f"Unsupported file extension: {file_ext}")
+            raise ValueError(f"Unsupported file extension for the file: {file_name}")
 
         return getattr(self, f"parse_{file_ext}")(file_name)
 
 
-    @abstractmethod
-    def update_headers_pepxml(self, headers):
-        pass
-
-    @abstractmethod
-    def add_modification_data_pepxml(self, spectrum_query, ns):
-        modification_list = spectrum_query.findall('.//pepXML:modification_info', namespaces=ns)
-        
-        if modification_list:
-            modification_info = [modification_list[0].attrib['modified_peptide']]
-        else:
-            modification_info = [None]
-        return modification_info
-
-
     def parse_pepxml(self, file_name):
-        """Parses pepxml (Comet) to tsv and outputs pandas dataframe"""
+        """Parses pepxml (Comet) and outputs pandas dataframe"""
         try:
-            core_name = file_name.split('/')[-1].split('.')[0]
-            tree = ET.parse(file_name)
-            root = tree.getroot()
 
             # Define the namespace used in the XML
             ns = {'pepXML': 'http://regis-web.systemsbiology.net/pepXML'}
 
-            with open(f"{core_name}_{self.engine}.tsv", 'w', newline='') as tsvfile:
-                writer = csv.writer(tsvfile, delimiter='\t')
+            def get_spectrum_queries():
+                for event, elem in ET.iterparse(file_name, events=('start', 'end')):
+                    if event == 'start' and elem.tag.endswith('spectrum_query'):
+                        spectrum_info = elem.attrib
 
-                # Extract headers from the first spectrum_query element
-                first_spectrum_query = root.findall('.//pepXML:spectrum_query', namespaces=ns)[0]
+                    elif event == 'end' and elem.tag.endswith('search_hit'):
+                        search_hit_info = self.parse_spectrum_info(elem.iter())
+                        analysis_result_list = elem.findall('.//pepXML:analysis_result', namespaces=ns)
+                        analysis_result_info = {}
 
-                if first_spectrum_query:
-                    headers = self.extract_headers_pepxml(first_spectrum_query, ns)
-                    writer.writerow(self.update_headers_pepxml(headers))
-                else:
-                    print("No data to process!")
-                    return
+                        for analysis_result in analysis_result_list:
+                            analysis_tag = analysis_result.attrib.get('analysis', '')
+                            raw_analysis_info = self.parse_spectrum_info(analysis_result.iter())
+                            cur_analysis = {f"{analysis_tag}_{key}": val for key, val in raw_analysis_info.items()}
+                            analysis_result_info.update(cur_analysis)
 
-                for spectrum_query in root.findall('.//pepXML:spectrum_query', namespaces=ns):
-                    spectrum_info = self.extract_values_to_list_pepxml(spectrum_query.items())
-                    search_hit_list = spectrum_query.findall('.//pepXML:search_hit', namespaces=ns)
-                    
-                    modification_info = self.add_modification_data_pepxml(spectrum_query, ns)
-                 
-                    for search_hit in search_hit_list:
-                        search_hit_info = self.extract_values_to_list_pepxml(search_hit.items())
-                        search_score_list = search_hit.findall('.//pepXML:search_score', namespaces=ns)
-                        search_score_info = [score.get('value') for score in search_score_list]
+                        combined = {**spectrum_info, **search_hit_info, **analysis_result_info}
+                        yield combined
+                        elem.clear()
 
-                        combined = spectrum_info + search_hit_info + search_score_info + modification_info
-                        writer.writerow(combined)
-
-            # TODO: is this step necessary?
-            df = pd.read_csv(f"{core_name}_{self.engine}.tsv", sep='\t')
+            df = pd.DataFrame(get_spectrum_queries())
             df.rename(columns=self.rename_columns(), inplace=True)
-            # TODO: this part may be different for different engines, the row may have a differnt name,
-            # so we need to export this login to individual engine parsers
-            df['is_decoy'] = [True if 'DECOY' in row.protein else False for row in df.itertuples()]
+            df['is_decoy'] = [True if self.decoy_tag in row.protein.lower() else False for row in df.itertuples()]
+            df['modifications'] = df.apply(lambda row: (row['position'], row['mass']), axis=1)
 
             return df
-
-        except ET.ParseError as e:
-            print(f"Error parsing XML: {e}")
+        
         except Exception as e:
-            print(f"An error occurred: {e}")
+            print(f"Error parsing file: {e}")
+            return None
+
+
+    def turn_strings_into_floats(self, x):
+        return {k: float(v) if _is_numeric(v) else v for k, v in x.items()}
+        
+
+    def parse_spectrum_info(self, input):
+            master_dict = {}
+            for item in input:
+                cur_dict = item.attrib
+                if all(key in cur_dict for key in ['name', 'value']):
+                    master_dict.update({cur_dict['name']: cur_dict['value']})
+                    del cur_dict['name']
+                    del cur_dict['value']
+                
+                master_dict.update(cur_dict)
+
+            return self.turn_strings_into_floats(master_dict)
 
 
     def parse_txt(self, file_name, sep='\t'):
@@ -101,230 +95,143 @@ class ProteomicsDataParser(ABC):
         df = pd.read_csv(file_name, sep=sep)
         # renaming will be handled by individual engines
         df.rename(columns=self.rename_columns(), inplace=True)
+        df['is_decoy'] = [True if self.decoy_tag in row.protein.lower() else False for row in df.itertuples()]
         return df
 
 
-    def parse_mzid(self):
-        # Implement common parsing logic
-        pass
+    def parse_mzid(self, xml_file_path):
+      
+        def get_spectra():
+            peptides = {}
+            peptide_evidence = {}
+            db_proteins = {}
+            # Iterate over XML elements as they are parsed
+            for event, elem in ET.iterparse(xml_file_path, events=('start', 'end')):
+                if event == 'start':
+                    
+                    if elem.tag.endswith("MzIdentML"):
+                        ns = {'mzIdentML': elem.tag.split('}')[0][1:]}
+                    
+                    elif elem.tag.endswith("DBSequence"):
+                        protein_info = elem.attrib
+                        protein_info['protein_name'] = protein_info['accession']
+                        prot_dict = {protein_info['id']: protein_info}
+                        db_proteins.update(prot_dict)
+
+                    # Process start events to collect Peptide information
+                    elif elem.tag.endswith("Peptide") and elem.attrib.get("id"):
+                        pep_info = self.parse_spectrum_info(elem.iter())
+                        pep_dict = {pep_info['id']: pep_info}
+                        peptides.update(pep_dict)
+                    
+                    elif elem.tag.endswith("PeptideEvidence") and elem.attrib.get("id"):
+                        evidence_dict = self.parse_spectrum_info(elem.iter())
+                        peptide_evidence.update({evidence_dict['id']: evidence_dict})
+                        
+
+                elif event == 'end':
+                    # Process end events to collect SpectrumIdentificationResults
+                    combined_info = {}
+                    if elem.tag.endswith("SpectrumIdentificationResult") and elem.attrib.get("id"):
+                        spectrum_attrib = elem.attrib
+
+                        for spectrum_identification_item in elem.findall('.//mzIdentML:SpectrumIdentificationItem', ns):
+                            psm_info = self.parse_spectrum_info(spectrum_identification_item.iter())
+                            mod_info = peptides.get(psm_info['peptide_ref'], {})
+                            # TODO: consider moving the logic of protein info to an abstract function, Comet handles it differently than MSGF+
+                            peptide_evidence_info = peptide_evidence.get(psm_info.get('peptideEvidence_ref', ""), "")
+                            protein_info = db_proteins.get(peptide_evidence_info.get('dBSequence_ref', ""), {})
+                            combined_info = {**spectrum_attrib, **psm_info, **mod_info, **protein_info, **peptide_evidence_info}
+                            yield combined_info
+
+                        elem.clear()
+
+        # Create a DataFrame
+        df = pd.DataFrame(get_spectra())
+        df.rename(columns=self.rename_columns(), inplace=True)
+        df['is_decoy'] = [True if self.decoy_tag in row.protein else False for row in df.itertuples()]
+
+        return df
 
 
-    def rename_columns(self):
-        pass
-
-
-    def extract_headers_pepxml(self, element, ns):
-        """Extracting header names from the first spectrum_query in pepxml"""
-
-        extract_names_to_list = lambda list_tuples: [x[0] for x in list_tuples]
-        headers = extract_names_to_list(element.items())
-
-        # Extract headers from the first search_hit element in the spectrum_query
-        first_search_hit = element.findall('.//pepXML:search_hit', namespaces=ns)[0]
-        if first_search_hit:
-            headers += extract_names_to_list(first_search_hit.items())
-
-            # Extract search_score keys and add to headers
-            search_score_list = first_search_hit.findall('.//pepXML:search_score', namespaces=ns)
-            search_score_keys = [score.get('name') for score in search_score_list]
-            headers += search_score_keys
-
-        return headers
-
-
-    def extract_values_to_list_pepxml(self, list_tuples):
-        return [x[1] for x in list_tuples]
-
-
-
-class CometParser(ProteomicsDataParser):
+class CometParser(PSMParser):
     def __init__(self):
         super().__init__()
-        self.engine = "Comet"
 
     def rename_columns(self):
         # Define column renaming logic specific to Comet
-        columns = {'start_scan': 'scan',
+        columns = { # pepxml columns
+                    'start_scan': 'scan',
                     'peptide': 'sequence',
                     'num_matched_peptides': 'num_candidates',
-                    'assumed_charge': 'charge'}
+                    'expect': 'e_value',
+                    'modified_peptide': 'modifications',
+                    #txt columns
+                    'e-value': 'e_value',
+                    'plain_peptide': 'sequence',
+                    # mzid columns
+                    'spectrumID': 'scan',
+                    'rank': 'hit_rank',
+                    'chargeState': 'charge',
+                    'peptide_ref': 'sequence',
+                    'Comet:expectation value': 'e_value',
+                    'peptideEvidence_ref': 'protein',
+                    'Comet:xcorr': 'xcorr',
+                    }
         return columns
 
-    def update_headers_pepxml(self, headers):
-        return headers + ["modifications"]
 
-    def add_modification_data_pepxml(self, spectrum_query, ns):
-        modification_list = spectrum_query.findall('.//pepXML:modification_info', namespaces=ns)
-        
-        if modification_list:
-            modification_info = [modification_list[0].attrib['modified_peptide']]
-        else:
-            modification_info = [None]
-        return modification_info
-
-
-class SpectraSTParser(ProteomicsDataParser):
+class SpectraSTParser(PSMParser):
     def __init__(self):
         super().__init__()
-        self.engine = "SpectraST"
 
     def rename_columns(self):
         # Define column renaming logic specific to SpectraST
         columns = {'start_scan': 'scan',
                     'peptide': 'sequence',
                     'hits_num': 'num_candidates',
-                    'p_value': 'p-value',
                     }
         return columns
     
-    def update_headers_pepxml(self, headers):
-        return headers + ["modifications"]
 
-    
-    def add_modification_data_pepxml(self, spectrum_query, ns):
-        modification_list = spectrum_query.findall('.//pepXML:modification_info', namespaces=ns)
-        
-        if modification_list:
-            modification_info = [modification_list[0].attrib['modified_peptide']]
-        else:
-            modification_info = [None]
-        return modification_info
-
-
-class TideParser(ProteomicsDataParser):
+class TideParser(PSMParser):
     def __init__(self):
         super().__init__()
-        self.engine = "Tide"
 
     def rename_columns(self):
         # Define column renaming logic specific to Tide
-        columns = {'exact p-value': 'p-value',
-                   'exact_pvalue': 'p-value',
+        columns = {'exact p-value': 'p_value',
                     'distinct matches/spectrum': 'num_candidates',
-                    'xcorr rank': 'hit_rank'}
+                    'xcorr rank': 'hit_rank',
+                    'protein id': 'protein',}
         
         return columns
 
 
-    def update_headers_pepxml(self, headers):
-        return headers
-
-    def add_modification_data_pepxml(self, spectrum_query, ns):
-        return []
-
-
-class MSFraggerParser(ProteomicsDataParser):
+class MSFraggerParser(PSMParser):
     def __init__(self):
         super().__init__()
-        self.engine = "MSFragger"
 
     def rename_columns(self):
         # Define column renaming logic specific to MSFragger
-        columns = {'start_scan': 'scan',
-                    'peptide': 'sequence',
-                    'hits_num': 'num_candidates',
-                    'p_value': 'p-value',
-                    }
+        columns = {'SpectrumID': 'scan',
+                'Rank': 'hit_rank', 
+                'Peptide_Sequence': 'sequence',
+                'Modifications': 'modifications'}
+
         return columns
     
 
-
-class MSGFParser(ProteomicsDataParser):
+class MSGFParser(PSMParser):
     def __init__(self):
         super().__init__()
-        self.engine = "MSGF+"
 
     def rename_columns(self):
         # Define column renaming logic specific to MSGF+
         columns = {'start_scan': 'scan',
                     'peptide': 'sequence',
                     'hits_num': 'num_candidates',
-                    'p_value': 'p-value',
+                    'MS-GF:EValue': 'e_value',
+                    'protein_name': 'protein',
                     }
         return columns
-
-
-
-class SpTXTParser:
-    """Process the data from sp.txt file produced by SpectraST"""
-
-    PeptideModel = namedtuple(
-                "Psm",
-                 ["peptide","mz", "ints", "mz_freq", "int_sd"],
-                 defaults=["", [], [], [], []])
-
-    def __init__(self):
-        self.lines = []
-        
-
-    def read_sptxt(self, filename):
-        """load all lines from the file"""
-        with open(filename, "r") as file:
-            lines = file.readlines()
-            self.lines = [line.rstrip() for line in lines]
-
-
-    def read_lines(self):
-        """Read full contents of the sptxt file"""
-        peptide_models = {}
-        k = 0
-
-        for line in self.lines:
-
-            if line[:4] == "Name":
-                k += 1
-
-                if k != 1:
-                    if k % 10000 == 0:
-                        print(f"{k}...", end="", flush=True)
-
-                    peptide_models[current_model.peptide] = current_model
-                    current_model = self.PeptideModel
-                else:
-                    current_model = self.PeptideModel
-
-                current_model.peptide = line[6:]
-
-            if len(line) > 1:
-                if line[1].isnumeric():
-                    current_model = self.add_pep_attrs(current_model, line)
-
-        return peptide_models
-
-
-
-    def read_only_peptide(self):
-        """Read only peptide info from the lines"""
-        peptides = []
-
-        for line in self.lines:
-
-            if line[:4] == "Name":
-                #peptides.append(self.clean_sequence(line[6:]))
-                peptides.append(str.rstrip(line[6:]))
-
-        return np.array(peptides)
-
-
-
-    @staticmethod
-    def clean_sequence(seq):
-        """remove unnecessary characters from the peptide sequence"""
-        s1 = re.sub(r'{}.*?{}'.format(re.escape("["),re.escape("]")),'', seq)
-        s1 = re.sub("-", "", s1)
-        if s1[0] == 'n':
-            s1 = s1[1:]
-        return s1[:-2]
-
-
-
-    @staticmethod
-    def add_pep_attrs(model, line):
-        """Add peptide info to the PeptideModel tuple"""
-        mz, ints, annot, cv = line.split('\t')
-        model.mz.append(eval(mz))
-        model.ints.append(float(ints))
-        model.mz_freq.append(eval(cv.split(" ")[0]))
-        model.int_sd.append(float(cv.split(" ")[1].split("|")[1])*float(ints))
-
-        return model

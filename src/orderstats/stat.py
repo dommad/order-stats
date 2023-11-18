@@ -11,15 +11,15 @@ class TEVDistribution:
     """Methods related to Gumbel distribution"""
 
     @staticmethod
-    def pdf(x_vals, location, scale, order_index):
+    def pdf(x_vals, location, scale, hit_rank):
         """
         PDF for TEV distribution of the specified order
         """
 
         scale = max(scale, 1e-6)
         z_vals = (x_vals - location) / scale
-        denominator = scale * math.factorial(order_index)
-        pdf = (1 / denominator) * np.exp(-(order_index + 1) * z_vals - np.exp(-z_vals))
+        denominator = scale * math.factorial(hit_rank - 1)
+        pdf = (1 / denominator) * np.exp(-(hit_rank) * z_vals - np.exp(-z_vals))
 
         return pdf
 
@@ -31,7 +31,7 @@ class TEVDistribution:
 
 
     @staticmethod
-    def cdf_asymptotic(x_val, location, scale, k):
+    def cdf_asymptotic(x_val, location, scale, hit_rank):
         """
         Cumulative Distribution Function (CDF) of the Truncated Exponential Value (TEV) distribution of order k
         for the mu-beta parametrization.
@@ -59,7 +59,7 @@ class TEVDistribution:
         """
 
         z_val = (np.array(x_val) - location) / scale
-        factorials = map(lambda m: np.exp(-m * z_val) / math.factorial(m), range(k + 1))
+        factorials = map(lambda m: np.exp(-m * z_val) / math.factorial(m), range(hit_rank + 1))
         summed = reduce(lambda x, y: x + y, factorials)
         cdf = np.exp(-np.exp(-z_val)) * summed
 
@@ -67,12 +67,12 @@ class TEVDistribution:
 
 
     @staticmethod
-    def cdf_finite_n(x_val, mu_, beta, k, n_cand):
+    def cdf_finite_n(x_val, mu_, beta, hit_rank, n_cand):
         """CDF of TEV distribution of order k for finite N form"""
         z_val = (np.array(x_val)-mu_)/beta
         fx_ = 1 - (1/n_cand)*np.exp(-z_val)
         summands = np.zeros(len(z_val))
-        for idx in range(k+1):
+        for idx in range(hit_rank+1):
             cur_sum = special.comb(n_cand, n_cand-idx)*pow(fx_, n_cand-idx)*pow(1-fx_, idx)
             summands += cur_sum
         return summands
@@ -82,10 +82,10 @@ class TEVDistribution:
 class MLE:
     """Maximum Likelihood Estimation for TEV distributions"""
 
-    def __init__(self, data, order):
-        self.data = data
-        self.order = order
-        self.initial_guess = np.array([np.mean(data), np.std(data)])
+    def __init__(self, scores, hit_rank):
+        self.scores = scores
+        self.hit_rank = hit_rank
+        self.initial_guess = np.array([np.mean(scores), np.std(scores)])
 
     def get_log_likelihood(self):
         pass
@@ -112,7 +112,7 @@ class MethodOfMoments:
         pass
 
 
-    def estimate_parameters(self, data, k):
+    def estimate_parameters(self, scores, hit_rank):
         """
         Method of Moments (MM) estimates of location and scale parameters for the specified order.
 
@@ -126,25 +126,21 @@ class MethodOfMoments:
         """
 
         euler_m = -special.digamma(1)
-        first_moment = self._get_first_moment(data)
-        second_moment = self._get_second_moment(data)
-        scale  = np.sqrt((second_moment - pow(first_moment, 2) )/self._get_trigamma(k))
-        location = first_moment - scale * (euler_m - self._get_sum_inverse_squared(k))
+        first_moment = self._get_first_moment(scores)
+        second_moment = self._get_second_moment(scores)
+        scale  = np.sqrt((second_moment - first_moment**2) / self._psi(hit_rank-1))
+        location = first_moment - scale * (euler_m - self._get_harmonic_function_value(hit_rank-1))
 
         return location, scale
+    
+    @staticmethod
+    def _psi(k):
+        return np.pi**2 / 6 - np.sum([ 1 / (x**2) for x in range(1, k+1)])
+    
+    @staticmethod
+    def _get_harmonic_function_value(k):
 
-
-    def _get_trigamma(self, k):
-        """
-        Calculate the trigamma function.
-
-        Parameters:
-        - k (int): Input parameter.
-
-        Returns:
-        - trigamma_value (float): Trigamma function value.
-        """
-        return math.pi**2 / 6 - self._get_sum_inverse_squared(k + 1)
+        return np.sum([1 / x for x in range(1, k+1)])
 
 
     @staticmethod
@@ -176,29 +172,14 @@ class MethodOfMoments:
 
         squared_values = np.square(data)
         length = max(1, len(data))
-        return (1 / length) * np.sum(squared_values)
-
-
-    @staticmethod
-    def _get_sum_inverse_squared(k):
-        """
-        Calculate the sum of squared values.
-
-        Parameters:
-        - k (int): Input parameter.
-
-        Returns:
-        - sum_squared_value (float): Sum of squared values.
-        """
-        squared_values = 1 / np.square(np.arange(1, k + 1))
-        return np.sum(squared_values)
+        return np.sum(squared_values) / length
 
 
 
 class AsymptoticGumbelMLE(MLE):
     
-    def __init__(self, data, order):
-        super().__init__(data, order)
+    def __init__(self, scores, hit_rank):
+        super().__init__(scores, hit_rank)
     
 
     def get_log_likelihood(self, log_params):
@@ -206,18 +187,18 @@ class AsymptoticGumbelMLE(MLE):
         Log-likelihood function for TEV distribution
         """
 
-        num_points = len(self.data)
+        num_points = len(self.scores)
         location, scale = np.exp(log_params) + 1e-10
-        z_values = (self.data - location) / scale
-        factorial_term = math.factorial(self.order)
-        likelihood = -num_points * np.log(scale * factorial_term) - (self.order + 1) * np.sum(z_values) - np.sum(np.exp(-z_values))
+        z_values = (self.scores - location) / scale
+        factorial_term = math.factorial(self.hit_rank - 1)
+        likelihood = -num_points * np.log(scale * factorial_term) - self.hit_rank * np.sum(z_values) - np.sum(np.exp(-z_values))
         return -likelihood
 
 
 class FiniteNGumbelMLE(MLE):
     
-    def __init__(self, data, order, num_candidates):
-        super().__init__(data, order)
+    def __init__(self, scores, hit_rank, num_candidates):
+        super().__init__(scores, hit_rank)
         self.num_candidates = num_candidates
 
 
@@ -233,9 +214,9 @@ class FiniteNGumbelMLE(MLE):
         - log_likelihood (float): Log-likelihood value.
         """
 
-        num_data_points = len(self.data)
+        num_data_points = len(self.scores)
         location, scale = np.exp(log_params) + 1e-10
-        z_values = (self.data - location) / scale
+        z_values = (self.scores - location) / scale
 
         cdf_term = 1 - (1 / self.num_candidates) * np.exp(-z_values)
         pdf_term = 1 / (self.num_candidates * scale) * np.exp(-z_values)

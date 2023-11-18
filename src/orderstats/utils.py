@@ -1,5 +1,6 @@
 import time
 import numpy as np
+from pandas import DataFrame, Series
 
 TH_N0 = 1000.
 TH_MU = 0.02 * np.log(TH_N0)
@@ -27,7 +28,7 @@ def log_function_call(func):
 
     return wrapper
 
-def calculate_tev(df, par_a, par_n0, engine):
+def calculate_tev(df: DataFrame, par_a: float, par_n0: float) -> Series:
     """
     Calculate the log-transformed e-value (TEV) score based on the given parameters.
 
@@ -40,11 +41,20 @@ def calculate_tev(df, par_a, par_n0, engine):
     np.ndarray: An array containing TEV scores for each row in the DataFrame.
     """
 
-    if engine == 'Comet':
-        return par_a * np.log(df['expect'] / par_n0)
+    if 'e_value' in df.columns:
+        return par_a * np.log(df['e_value'] / par_n0)
     else:
-        return par_a * np.log(df['p-value'] * df['num_candidates'] / par_n0)
-    
+        return par_a * np.log(df['p_value'] * df['num_candidates'] / par_n0)
+
+def _is_numeric(value):
+        if not isinstance(value, str):
+            return False
+        try:
+            float(value)
+            return True
+
+        except ValueError:
+            return False
 
 def largest_factors(n):
     for i in range(n // 2, 0, -1):

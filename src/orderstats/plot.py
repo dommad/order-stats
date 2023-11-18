@@ -1,7 +1,12 @@
 import matplotlib.pyplot as plt
 import numpy as np
 from KDEpy import FFTKDE
-from . import stat as of
+from . import stat
+from .utils import largest_factors
+from .estimation import ParametersData
+from .optimization_modes import LinearRegressionMode
+from typing import Tuple
+import pandas as pd
 
 
 TH_N0 = 1000.
@@ -15,42 +20,45 @@ class Plotting:
         self.out_name = out_name
 
         plt.style.use('ggplot')
-        plt.rcParams.update({'font.size': 13, 'font.family': 'Helvetica'})
+        plt.rcParams.update({'font.size': 13, 'font.family': 'Helvetica',
+                             'xtick.labelsize': 10, 'ytick.labelsize': 10})
 
 
-
-
-    def plot_mubeta(self, parameters_dict, methods = ['mle', 'mm'], **kwargs):
+    def plot_mubeta(self, parameters_data: ParametersData, selected_hits: Tuple, **kwargs):
         
         expand = lambda df: (df.loc['location', :], df.loc['scale', :])
 
         plot_kwargs = {'marker': 'o', 'edgecolors': 'k', 'linewidth': 0.5}
-        colors = {'mle': '#2D58B8', 'mm': '#D65215'}
+        colors = ('#2D58B8', '#D65215')
 
-        charges = parameters_dict.keys()
-        num_charges = len(charges)
-        fig, axs = plt.subplots(1, num_charges, figsize=(num_charges * 4, 4))
+        charges = parameters_data.available_charges
+
+        fig, axs = plt.subplots(1, len(charges), figsize=(len(charges) * 4, 4))
 
         for idx, charge in enumerate(charges):
-            cur_charge = parameters_dict[charge]
+            this_charge_params_dict = parameters_data.output_dict[charge]
 
-            for method in methods:
-                xs, ys = expand(cur_charge[method][0])
-                axs[idx].scatter(xs, ys, color=colors[method], **plot_kwargs)
+            for p_idx, item in enumerate(this_charge_params_dict.items()):
+                p_estimator, param_df = item
+                # TODO: allow selection of hits to plot
+                param_df = param_df.loc[:, selected_hits]
+                mu_vals, beta_vals = expand(param_df)
+                axs[idx].scatter(mu_vals, beta_vals, color=colors[p_idx], label=p_estimator, **plot_kwargs)
 
                 if kwargs.get('annotation'):
-                    self.annotation(axs[idx], xs, ys, colors[method])
+                    self.annotation(axs[idx], mu_vals, beta_vals, colors[p_idx])
 
                 if kwargs.get('linear_regression'):
-                    linreg = cur_charge[method][1]
-                    self.add_linear_regression(axs[idx], xs, linreg, color=colors[method])
+                    linreg = LinearRegressionMode(param_df).find_best_linear_regression()
+                    self.add_linear_regression(axs[idx], mu_vals, linreg, color=colors[p_idx])
+
 
             axs[idx].set_xlabel(r"$\mu$")
             axs[idx].set_ylabel(r"$\beta$")
             axs[idx].set_title(f"charge {charge}")
 
         fig.tight_layout()
-        fig.savefig(f"./{self.out_name}_mubeta_params_annot_{kwargs.get('annotation')}_lr_{kwargs.get('linear_regression')}_{methods}.png", dpi=600)
+        fig.savefig(f"./{self.out_name}_mubeta_params_annot_{kwargs.get('annotation')}_lr_{kwargs.get('linear_regression')}.svg", dpi=600)
 
     
     @staticmethod
@@ -60,8 +68,8 @@ class Plotting:
         starting parameters as an asterisk
         """
         x_range = np.array([min(TH_MU, min(xs)), max(xs)])
-        axes.plot(x_range, x_range * linreg.slope + linreg.intercept)
-        axes.scatter([TH_MU], [TH_BETA], marker='*', s=20, color='orange')
+        axes.plot(x_range, x_range * linreg.slope + linreg.intercept, color=color)
+        axes.scatter([TH_MU], [TH_BETA], marker='*', s=100, color='green')
 
 
     @staticmethod
@@ -70,7 +78,6 @@ class Plotting:
         offset = 2
         for idx, pair in enumerate(zip(x_text, y_text)):
             axes.annotate(idx + offset, (pair[0], pair[1]-0.0002), color=color)
-
 
     
     @staticmethod
@@ -83,43 +90,52 @@ class Plotting:
             ylab = 'empirical CDF'
             xlab = 'theoretical CDF'
 
-        for idx in range(n_col*n_row):
+        for idx in range(n_col * n_row):
             if idx % n_col == 0:
                 axs[divmod(idx, n_col)].set_ylabel(ylab)
 
             if divmod(idx, n_col)[0] == n_row-1:
                 axs[divmod(idx, n_col)].set_xlabel(xlab)
 
+    @staticmethod
+    def get_number_lower_hits(param_dict):
+
+        first_key = list(param_dict.keys())[0]
+        sample_df = param_dict[first_key]
+        if isinstance(sample_df, pd.DataFrame):
+            return param_dict[first_key].shape[1]
+        else:
+            raise TypeError(f"The value in parameters dictionary should be pd.DataFrame, but it is {sample_df}")
+
+    @staticmethod
+    def get_optimal_subplot_numbers(num_entries):
+        return largest_factors(num_entries)
 
 
-    def plot_mle_mm_lower_models(self, lower_order_df, parameters_dict):
+    def plot_lower_models(self, df, score, parameters_data: ParametersData):
         """Plot density and PP plots for models of lower order TEV distributions"""
 
-        # TODO: this should be determined by the number of entries in the parameters dict
-        n_row = 3
-        n_col = 3
+        charges = parameters_data.available_charges
 
-        fig1, ax1 = plt.subplots(n_row, n_col, figsize=(n_row*2, n_col*2), constrained_layout=True)
-        fig2, ax2 = plt.subplots(n_row, n_col, figsize=(n_row*2, n_col*2), constrained_layout=True)
+        for charge in charges:
+            this_charge_params_dict = parameters_data.output_dict[charge]
+            this_charge_df = df[df['charge'] == charge]
 
+            num_lower_hits = self.get_number_lower_hits(this_charge_params_dict)
+            n_row, n_col = self.get_optimal_subplot_numbers(num_lower_hits)
+    
+            fig, axes = plt.subplots(n_row, n_col, figsize=(n_row*3, n_col*3), constrained_layout=True)
+            idx_combinations = [(i, j) for i in range(n_row) for j in range(n_col)]
 
-        hit_rank = 1
-
-        for row in range(3):
-            for col in range(3):
-
-                cur_tevs = lower_order_df[lower_order_df['hit_rank'] == hit_rank]['tev']
-                self.add_lower_model_plot(ax1[row, col], cur_tevs, parameters_dict, hit_rank)
-                self.add_pp_plot(ax2[row, col], cur_tevs, parameters_dict, hit_rank)
-                hit_rank += 1
-
-
-        self.add_axis_labels(ax1, n_col, n_row, mode='density')
-        self.add_axis_labels(ax2, n_col, n_row, mode='PP')
-
-        fig1.savefig(f"./graphs/{self.out_name}_lower_models_rank{hit_rank}.png", dpi=600, bbox_inches="tight")
-        fig2.savefig(f"./graphs/{self.out_name}_pp_plots_rank{hit_rank}.png", dpi=600, bbox_inches="tight")
+            for hit_idx in range(num_lower_hits):
+                hit_rank = hit_idx + 2 # we skip hit number 1 as it's a mixture
+                this_hit_scores = this_charge_df[this_charge_df['hit_rank'] == hit_rank][score].values
         
+                self.add_lower_model_plot(axes[idx_combinations[hit_idx]], this_hit_scores, this_charge_params_dict, hit_rank)
+            
+            self.add_axis_labels(axes, n_col, n_row, mode='density')
+            fig.savefig(f"./{self.out_name}_lower_models_charge_{charge}.svg", dpi=600, bbox_inches="tight")
+            
 
     @staticmethod
     def add_pp_plot(axs, cur_tevs, parameters_dict, hit_rank):
@@ -128,8 +144,8 @@ class Plotting:
         mle_pars = parameters_dict['mle'][0].loc[:, hit_rank]
         mm_pars = parameters_dict['mm'][0].loc[:, hit_rank]
 
-        mm_pp = of.TEVDistribution().cdf_asymptotic(cur_tevs, mm_pars[0], mm_pars[1], hit_rank)
-        mle_pp = of.TEVDistribution().cdf_asymptotic(cur_tevs, mle_pars[0], mle_pars[1], hit_rank)
+        mm_pp = stat.TEVDistribution().cdf_asymptotic(cur_tevs, mm_pars[0], mm_pars[1], hit_rank)
+        mle_pp = stat.TEVDistribution().cdf_asymptotic(cur_tevs, mle_pars[0], mle_pars[1], hit_rank)
         emp_pp = np.arange(1, len(cur_tevs) + 1) / len(cur_tevs)
 
         axs.scatter(mle_pp, emp_pp, color='#D65215', s=1)
@@ -138,49 +154,60 @@ class Plotting:
 
 
     @staticmethod
-    def add_lower_model_plot(axs, cur_tevs, parameters_dict, hit_rank):
-        """Plotting KDE for MLE and MM-based models of lower-order distributions"""
+    def add_lower_model_plot(axs, scores, estimator_params: dict, hit_rank):
+        """Plotting KDE for all estimation methods for given hit_rank"""
 
-        def kde_plots(axes, kde_xs, parameters, order, color):
+        def kde_plots(axes, kde_xs, parameters, p_estimator, order, color):
             mu, beta = parameters
-            pdf_vals = of.TEVDistribution().pdf(kde_xs, mu, beta, order)
-            axes.plot(kde_xs, pdf_vals, color=color)
+            pdf_vals = stat.TEVDistribution().pdf(kde_xs, mu, beta, order)
+            axes.plot(kde_xs, pdf_vals, color=color, label=p_estimator)
 
 
         colors = ('#2D58B8', '#D65215', '#2CB199')
-        kde_xs, kde_ys_observed = FFTKDE(bw=0.0005, kernel='gaussian').fit(cur_tevs).evaluate(2**8)
+
+        kde_xs, kde_ys_observed = FFTKDE(bw=0.0005, kernel='gaussian').fit(scores).evaluate(2**8)
+        axs.plot(kde_xs, kde_ys_observed, color='grey')
+        
 
         if len(kde_ys_observed) == 0:
             return 0
         
-        mle_pars = parameters_dict['mle'][0].loc[:, hit_rank]
-        mm_pars = parameters_dict['mm'][0].loc[:, hit_rank]
+        for idx, (p_estimator, param_df) in enumerate(estimator_params.items()):
+            parameters = param_df.loc[:, hit_rank].values
+            kde_plots(axs, kde_xs, parameters, p_estimator, hit_rank, color=colors[idx])
 
-        # plot the observed data KDE
-        axs.plot(kde_xs, kde_ys_observed, color=next(colors))
-        kde_plots(axs, kde_xs, mle_pars, hit_rank, color=next(colors))
-        kde_plots(axs, kde_xs, mm_pars, hit_rank, color=next(colors))
         axs.set_ylim(0,)
+        axs.set_title(f"hit {hit_rank}", fontsize=10)
+
+    @staticmethod
+    def get_rough_pi0_estimate(scores, mu, beta, hit_rank):
+
+        pi0 = len(scores[scores < 0.2]) / len(scores)
+        xs, kde_observed = FFTKDE(bw=0.01, kernel='gaussian').fit(scores).evaluate(2**8)
+        pdf_fitted = stat.TEVDistribution().pdf(xs, mu, beta, hit_rank=hit_rank)
+
+        return pi0, xs, kde_observed, pdf_fitted
 
 
 
-    def plot_top_model_with_pi0(self, df, optimal_params):
+    def plot_top_model_with_pi0(self, df, optimal_parameters: dict, score):
         """find pi0 estimates for plotting the final models"""
 
-        num_charges = len(optimal_params)
+        num_charges = len(optimal_parameters)
         colors = ('#2CB199', '#2CB199', '#D65215')
         fig, axs = plt.subplots(1, num_charges, figsize=(5 * num_charges, 5))
 
 
-        for idx, charge in enumerate(optimal_params):
-
-            top_tevs = df[(df['charge'] == charge) & (df['hit_rank'] == 1) ]['tev'].values
-            mu, beta = optimal_params[charge]
+        for idx, charge in enumerate(optimal_parameters):
+            
+            top_scores = df[(df['charge'] == charge) & (df['hit_rank'] == 1) ][score].values
+            estimation_setting, (mu, beta) = optimal_parameters[charge]
 
             # get a rough approximation of pi0 for plotting only
-            pi0 = len(top_tevs[top_tevs < 0.17]) / len(top_tevs)
-            xs, kde_observed = FFTKDE(bw=0.01, kernel='gaussian').fit(top_tevs).evaluate(2**8)
-            pdf_fitted = of.TEVDistribution().pdf(xs, mu, beta, order_index=0)
+            # TODO: to be abstracted out
+
+            pi0, xs, kde_observed, pdf_fitted = self.get_rough_pi0_estimate(top_scores, mu, beta, 1) # we only work on top hits
+           
 
             axs[idx].fill_between(xs, kde_observed, alpha=0.2, color=colors[0], label='observed')
             axs[idx].plot(xs, kde_observed, color=colors[1])
@@ -191,7 +218,7 @@ class Plotting:
             axs[idx].set_ylabel("density")
 
         fig.tight_layout()
-        fig.savefig(f"./{self.out_name}_fitted_top_models.png", dpi=600, bbox_inches="tight")
+        fig.savefig(f"./{self.out_name}_fitted_top_models.svg", dpi=600, bbox_inches="tight")
 
     ### plotting for BIC ###
 
@@ -208,7 +235,7 @@ class Plotting:
         axs.set_xlabel("hit_rank")
         axs.set_ylabel("relative BIC difference [%]")
 
-        fig.savefig(f"./{self.out_name}_lower_models_BIC_charge_{charge}.png", dpi=600, bbox_inches="tight")
+        fig.savefig(f"./{self.out_name}_lower_models_BIC_charge_{charge}.svg", dpi=600, bbox_inches="tight")
 
     
     #### plotting for validation #####
