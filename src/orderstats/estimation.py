@@ -19,7 +19,6 @@ class ParametersData:
     available_charges: set
 
 
-
 class DataFrameProcessor:
 
     def __init__(self) -> None:
@@ -99,7 +98,6 @@ class OptimalModelsFinder:
         return best_parameters
 
 
-
 class ParametersProcessing:
     
     def __init__(self, df, df_processor: DataFrameProcessor, filter_score: str) -> None:
@@ -145,8 +143,6 @@ class ParametersProcessing:
             parameters[hit] = hit_parameters
     
         return pd.DataFrame.from_records(parameters, index=['location', 'scale'])
-
-
 
 
 class LowerOrderEstimation:
@@ -214,87 +210,4 @@ class LowerOrderEstimation:
 
 
 
-class PiZeroEstimator:
-    """estimate pi0 for given set of p-values"""
 
-    def __init__(self):
-        pass
-
-    @staticmethod
-    def get_pi0_b(pvs, b_val):
-        """calculate pi0 estimate for given b value"""
-        i = 1
-        condition = False
-
-        while condition is False:
-            t_i = (i-1)/b_val
-            t_iplus = i/b_val
-            ns_i = len(pvs[(pvs < t_iplus) & (pvs >= t_i)])
-            nb_i = len(pvs[pvs >= t_i])
-            condition = bool(ns_i <= nb_i/(b_val - i + 1))
-            i += 1
-
-        i -= 1
-
-        summand = 0
-        for j in range(i-1, b_val+1):
-            t_j = (j-1)/b_val
-            summand += len(pvs[pvs >= t_j])/((1-t_j)*len(pvs))
-
-        pi_0 = 1/(b_val - i + 2)*summand
-
-        return pi_0
-
-    def get_all_pi0s(self, pvs):
-        """calculate pi0 for each b value"""
-        # B is from I = {5, 10, 20, 50, 100}
-
-        pi0s = []
-        b_set = [5, 10, 20, 50, 100]
-
-        for b_val in b_set:
-            pi0s.append(self.get_pi0_b(pvs, b_val))
-        
-        return pi0s
-
-
-    def get_boostrap_pi0s(self, pvs, no_reps, b_val):
-
-        pi0_estimates = np.zeros(no_reps)
-
-        for rep in range(no_reps):
-            random.seed()
-            new_pvs = np.array(random.choices(pvs, k=len(pvs)))
-            pi0_estimates[rep] = self.get_pi0_b(new_pvs, b_val)
-
-        return pi0_estimates
-
-    @staticmethod
-    def get_mse(pi0_bootstrap, pi0_true):
-        """Calculates MSE for given set of p-values and true pi0 value"""
-        summand = 0
-        for i in range(len(pi0_bootstrap)):
-            summand += pow(pi0_bootstrap[i] - pi0_true, 2)
-        
-        return summand/len(pi0_bootstrap)
-
-
-    def find_optimal_pi0(self, pvs, n_reps):
-        """Find the optimal pi0 according to Jiang and Doerge (2008)"""
-        # compute pi0 for each B
-        pi0_estimates = self.get_all_pi0s(pvs)
-        pi0_ave = np.mean(pi0_estimates)
-        b_set = [5, 10, 20, 50, 100]
-
-        # compute MSE for each pi0 estimate
-        mses = []
-
-        for pi0_estim, b_val in zip(pi0_estimates, b_set):
-            bootstraps = self.get_boostrap_pi0s(pvs, n_reps, b_val)
-            mses.append(self.get_mse(bootstraps, pi0_ave))
-
-        optimal_idx = mses.index(sorted(mses)[0])
-        print(mses)
-        print(pi0_estimates)
-        print(optimal_idx)
-        return pi0_estimates[optimal_idx]

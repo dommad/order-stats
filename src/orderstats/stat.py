@@ -5,7 +5,6 @@ from scipy import special, stats as st, optimize as opt
 import numpy as np
 from KDEpy import FFTKDE
 import matplotlib.pyplot as plt
-from .utils import *
 
 class TEVDistribution:
     """Methods related to Gumbel distribution"""
@@ -87,7 +86,7 @@ class MLE:
         self.hit_rank = hit_rank
         self.initial_guess = np.array([np.mean(scores), np.std(scores)])
 
-    def get_log_likelihood(self):
+    def get_log_likelihood(self, log_params):
         pass
 
     def run_mle(self):
@@ -180,7 +179,6 @@ class AsymptoticGumbelMLE(MLE):
     
     def __init__(self, scores, hit_rank):
         super().__init__(scores, hit_rank)
-    
 
     def get_log_likelihood(self, log_params):
         """
@@ -220,7 +218,7 @@ class FiniteNGumbelMLE(MLE):
 
         cdf_term = 1 - (1 / self.num_candidates) * np.exp(-z_values)
         pdf_term = 1 / (self.num_candidates * scale) * np.exp(-z_values)
-        remaining_term = self.num_candidates - self.order
+        remaining_term = self.num_candidates - self.hit_rank
 
         term1 = num_data_points * np.log(remaining_term * special.comb(self.num_candidates, remaining_term))
         term2 = np.sum(np.log(pdf_term)) + (remaining_term - 1) * np.sum(np.log(cdf_term))
@@ -327,7 +325,7 @@ class EMAlgorithm:
         if fixed_gumbel:
             mu1, beta1 = fixed_gumbel_params
 
-        for iteration in range(max_iterations):
+        for _ in range(max_iterations):
             # E-step
             pi1 = 1 - pi0
             pdf_gumbel = st.gumbel_r.pdf(self.data, mu1, beta1) * pi0

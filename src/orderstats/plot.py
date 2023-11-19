@@ -129,7 +129,7 @@ class Plotting:
 
             for hit_idx in range(num_lower_hits):
                 hit_rank = hit_idx + 2 # we skip hit number 1 as it's a mixture
-                this_hit_scores = this_charge_df[this_charge_df['hit_rank'] == hit_rank][score].values
+                this_hit_scores = this_charge_df.loc[this_charge_df['hit_rank'] == hit_rank, score].values
         
                 self.add_lower_model_plot(axes[idx_combinations[hit_idx]], this_hit_scores, this_charge_params_dict, hit_rank)
             
@@ -156,11 +156,7 @@ class Plotting:
     @staticmethod
     def add_lower_model_plot(axs, scores, estimator_params: dict, hit_rank):
         """Plotting KDE for all estimation methods for given hit_rank"""
-
-        def kde_plots(axes, kde_xs, parameters, p_estimator, order, color):
-            mu, beta = parameters
-            pdf_vals = stat.TEVDistribution().pdf(kde_xs, mu, beta, order)
-            axes.plot(kde_xs, pdf_vals, color=color, label=p_estimator)
+            
 
 
         colors = ('#2D58B8', '#D65215', '#2CB199')
@@ -174,7 +170,9 @@ class Plotting:
         
         for idx, (p_estimator, param_df) in enumerate(estimator_params.items()):
             parameters = param_df.loc[:, hit_rank].values
-            kde_plots(axs, kde_xs, parameters, p_estimator, hit_rank, color=colors[idx])
+            mu, beta = parameters
+            pdf_vals = stat.TEVDistribution().pdf(kde_xs, mu, beta, hit_rank)
+            axs.plot(kde_xs, pdf_vals, color=colors[idx], label=p_estimator)
 
         axs.set_ylim(0,)
         axs.set_title(f"hit {hit_rank}", fontsize=10)
@@ -240,6 +238,13 @@ class Plotting:
     
     #### plotting for validation #####
 
+   
+
+        
+
+
+class PlotValidation:
+
     def __plot_boot_fdrs(self, axs, all_stats, pi_0):
         """plotting bootstrap FDP vs FDR"""
 
@@ -294,5 +299,39 @@ class Plotting:
         else:
             axs.set_xlim(-0.001, 0.1+0.001)
             axs.set_ylim(-0.001, 0.1+0.001)
+
+
+
+    def plot_validation_results(self, all_boot_stats, pi_0):
+        """Plot validation results"""
+
+        fig, axs = plt.subplots(1, 2, figsize=(6,3))
+        self.__plot_boot_fdrs(axs[0], all_boot_stats, pi_0)
+        self.__plot_boot_tps(axs[1], all_boot_stats)
+        fig.tight_layout()
+
+        fig.savefig(f"./graphs/{self.out}_validation.png", dpi=600, bbox_inches='tight')
+
+
+    @staticmethod
+    def plot_val_results(axs, fdrs, fdps, tps, lim, col1, col2):
+        """Plot both FDP and TP vs FDR in the same plot"""
+        #fig, ax = plt.subplots(figsize=(6,6))
+        #lim = 0.1
+        axs.grid(color='gray', linestyle='--', linewidth=1, alpha=0.2)
+        axs.plot(fdrs, fdps, color=col1)
+        axs.scatter(fdrs, fdps, marker='.', color=col1)
+        axs.set_ylabel("FDP")
+        ax2=axs.twinx()
+        #ax.plot(fdr, decs)
+        #ax.scatter(fdr, decs, marker='.')
+        ax2.plot(fdrs, tps, marker='.', color=col2)
+        ax2.set_ylabel("TPR", color=col2)
+        ax2.set_ylim(0,1)
+        axs.plot([0,lim], [0,lim], color='k', alpha=0.5)
+        axs.set_xlim(-0.001, lim)
+        axs.set_ylim(-0.001, lim)
+        #ax2.legend(['lower', 'decoys', 'x-y'])
+
 
 

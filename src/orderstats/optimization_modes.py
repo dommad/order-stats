@@ -73,14 +73,14 @@ class LinearRegressionMode(ParameterOptimizationMode):
         initial_guess = np.mean(data)
         bounds = [(0.1 * initial_guess, 1.5 * initial_guess)]
 
-        objective_f = lambda params, scores, hit_rank: get_log_likelihood(params, scores, hit_rank)
+        # objective_f = lambda params, scores, hit_rank: get_log_likelihood(params, scores, hit_rank)
 
         results = opt.minimize(
-            fun = objective_f,
+            fun = get_log_likelihood,
             x0 = np.array([initial_guess]),
             args=(data, hit_rank,),
             method='L-BFGS-B',
-            bounds=bounds   
+            bounds=bounds
             )
         
         opt_mu = results.x[0]
@@ -104,7 +104,7 @@ class LinearRegressionMode(ParameterOptimizationMode):
 
 
         best_linreg_results = None
-        best_lr_cutoff = None
+        # best_lr_cutoff = None
         max_pearson_r = -1  # Initialize with a value less than any possible Pearson's R
 
         # Iterate over lr_cutoff values
@@ -121,7 +121,7 @@ class LinearRegressionMode(ParameterOptimizationMode):
             if abs(linreg_results.rvalue) > max_pearson_r:
                 max_pearson_r = abs(linreg_results.rvalue)
                 best_linreg_results = linreg_results
-                best_lr_cutoff = lr_cutoff
+                # best_lr_cutoff = lr_cutoff
 
         return best_linreg_results
 
@@ -170,14 +170,14 @@ class MeanBetaMode(ParameterOptimizationMode):
         initial_guess = np.mean(scores)
         bounds = [(0.1 * initial_guess, 1.5 * initial_guess)]
 
-        objective_f = lambda params, scores, hit_rank: get_log_likelihood(params, scores, hit_rank)
+        # objective_f = lambda params, scores, hit_rank: get_log_likelihood(params, scores, hit_rank)
 
         results = opt.minimize(
-            fun = objective_f,
+            fun = get_log_likelihood,
             x0 = np.array([initial_guess]),
             args=(scores, hit_rank,),
             method='L-BFGS-B',
-            bounds=bounds   
+            bounds=bounds
             )
         
         opt_mu = results.x[0]

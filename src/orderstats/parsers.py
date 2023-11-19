@@ -1,10 +1,8 @@
 """Module for processing data from spectral libraries in format .sptxt"""
-import re
 from abc import ABC, abstractmethod
-import numpy as np
-import pandas as pd
 import xml.etree.ElementTree as ET
-from .utils import _is_numeric
+import pandas as pd
+from .utils import _is_numeric, ParserError
 
 FILE_FORMATS = ['pep.xml', 'txt', 'mzid']
 SEARCH_ENGINES = ['Comet', 'SpectraST', 'Tide', 'MSFRagger', 'MSGF+']
@@ -67,8 +65,8 @@ class PSMParser(ABC):
 
             return df
         
-        except Exception as e:
-            print(f"Error parsing file: {e}")
+        except ParserError as err:
+            print(f"Error parsing file: {err}")
             return None
 
 
@@ -76,18 +74,18 @@ class PSMParser(ABC):
         return {k: float(v) if _is_numeric(v) else v for k, v in x.items()}
         
 
-    def parse_spectrum_info(self, input):
-            master_dict = {}
-            for item in input:
-                cur_dict = item.attrib
-                if all(key in cur_dict for key in ['name', 'value']):
-                    master_dict.update({cur_dict['name']: cur_dict['value']})
-                    del cur_dict['name']
-                    del cur_dict['value']
-                
-                master_dict.update(cur_dict)
+    def parse_spectrum_info(self, spectrum_info):
+        master_dict = {}
+        for item in spectrum_info:
+            cur_dict = item.attrib
+            if all(key in cur_dict for key in ['name', 'value']):
+                master_dict.update({cur_dict['name']: cur_dict['value']})
+                del cur_dict['name']
+                del cur_dict['value']
+            
+            master_dict.update(cur_dict)
 
-            return self.turn_strings_into_floats(master_dict)
+        return self.turn_strings_into_floats(master_dict)
 
 
     def parse_txt(self, file_name, sep='\t'):
@@ -235,3 +233,20 @@ class MSGFParser(PSMParser):
                     'protein_name': 'protein',
                     }
         return columns
+
+
+class ParamFileParser:
+
+    def __init__(self, param_input) -> None:
+        self.param_input = param_input
+        self.param_dict: dict = {}
+    
+    def read_param_file(self):
+
+        with open(self.param_input, 'r', encoding='utf-8') as file:
+            lines = file.readlines()
+    
+            for idx, line in enumerate(lines, 1):
+                params = line.rstrip().split(' ')
+                params = tuple(float(x) for x in params)
+                self.param_dict[idx] = params

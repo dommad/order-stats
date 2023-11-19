@@ -1,6 +1,8 @@
 import time
 import numpy as np
 from pandas import DataFrame, Series
+from abc import ABC, abstractmethod
+
 
 TH_N0 = 1000.
 TH_MU = 0.02 * np.log(TH_N0)
@@ -18,6 +20,7 @@ def timeit(func):
         return result
     return wrapper
 
+
 def log_function_call(func):
 
     def wrapper(*args, **kwargs):
@@ -27,6 +30,7 @@ def log_function_call(func):
         return result
 
     return wrapper
+
 
 def calculate_tev(df: DataFrame, par_a: float, par_n0: float) -> Series:
     """
@@ -43,26 +47,51 @@ def calculate_tev(df: DataFrame, par_a: float, par_n0: float) -> Series:
 
     if 'e_value' in df.columns:
         return par_a * np.log(df['e_value'] / par_n0)
-    else:
-        return par_a * np.log(df['p_value'] * df['num_candidates'] / par_n0)
+
+    return par_a * np.log(df['p_value'] * df['num_candidates'] / par_n0)
+
 
 def _is_numeric(value):
-        if not isinstance(value, str):
-            return False
-        try:
-            float(value)
-            return True
+    if not isinstance(value, str):
+        return False
+    try:
+        float(value)
+        return True
 
-        except ValueError:
-            return False
+    except ValueError:
+        return False
+
 
 def largest_factors(n):
     for i in range(n // 2, 0, -1):
         if n % i == 0:
             return n // i, i
-    
+
 
 class StrClassNameMeta(type):
 
     def __str__(cls):
         return cls.__name__
+    
+
+class PValueCalculator(ABC):
+
+    @abstractmethod
+    def calculate_p_value(self, df_to_modify, score_column, param_dict):
+        pass
+
+
+class SidakCorrectionMixin:
+
+    @staticmethod
+    def sidak_correction(df, p_val_column):
+        df[f"{p_val_column}_sidak"] = 1 - pow(1 - df[p_val_column].values, df["num_candidates"].values)
+        return df
+
+
+class ParserError(Exception):
+    """A custom exception class."""
+    def __init__(self, message="An error occurred."):
+        self.message = message
+        super().__init__(self.message)
+
