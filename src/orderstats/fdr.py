@@ -1,4 +1,4 @@
-
+"""Methods used to estimate false discovery rate"""
 from abc import ABC, abstractmethod
 import pandas as pd
 import numpy as np
@@ -15,10 +15,10 @@ class FDRCalculator(ABC):
 class BenjaminiHochberg(FDRCalculator):
 
     @staticmethod
-    def calculate_fdp_tpr(df_sorted: pd.DataFrame, critical_array: np.ndarray, pos_label: str, neg_label: str):
+    def calculate_fdp_tpr(df_sorted: pd.DataFrame, p_value_column: str, critical_array: np.ndarray, pos_label: str, neg_label: str):
 
         df_labels = df_sorted['gt_label'].to_numpy()
-        sorted_pvals = df_sorted['p_value'].to_numpy()
+        sorted_pvals = df_sorted[p_value_column].to_numpy()
         len_df_correct_labels = len(df_labels[df_labels == 0])
         masks = [sorted_pvals <= x for x in critical_array]
         bh_gt_labels = [df_labels[mask] for mask in masks]
@@ -37,7 +37,7 @@ class DecoyCount(FDRCalculator):
     
     def calculate_fdr(self, df, score_name, decoy_factor):
         
-        df.sort_values(self.fdr_score, ascending=False, inplace=True)
+        df.sort_values(score_name, ascending=False, inplace=True)
         df[f"{score_name}_cum_dec"] = decoy_factor * df["is_decoy"].cumsum() / (~df['is_decoy']).cumsum()
 
         df_no_decoys = df[~df["is_decoy"]].copy()

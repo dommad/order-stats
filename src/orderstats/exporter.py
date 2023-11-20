@@ -15,11 +15,12 @@ class PeptideProphetExporter(ABC):
     def __init__(self, out_name) -> None:
         self.out_name = out_name
 
-    def export_parameters(self, params_est):
+    def export_parameters(self, params_data: dict):
 
         """export params to txt for modified PeptideProphet (mean & std)"""
         try:
-            params = pd.DataFrame.from_dict(params_est, orient='index', columns=['location', 'scale'])
+            extracted_params = dict((key, val[1]) for key, val in params_data.items())
+            params = pd.DataFrame.from_dict(extracted_params, orient='index', columns=['location', 'scale'])
             params['location'] += params['scale'] * np.euler_gamma # convert to mean
             params['scale'] = np.pi / np.sqrt(6) * params['scale'] # conver to std
             params.loc[1, :] = params.iloc[0, :] # add parameters for charge 1+ that we didn't consider
@@ -33,7 +34,7 @@ class PeptideProphetExporter(ABC):
             final_params = pd.concat([params, to_concat], axis=0, ignore_index=False)
             final_params.sort_index(inplace=True)
 
-            final_params.to_csv(f"pp_params_{self.out}.txt", sep=" ", header=None, index=None)
+            final_params.to_csv(f"pp_params_{self.out_name}.txt", sep=" ", header=None, index=None)
         
         except Exception as e:
             print(f"Error occurred during parameter export: {str(e)}")

@@ -11,6 +11,14 @@ TH_BETA = 0.02
 NUM_CHARGES_TO_EXPORT = 10
 
 
+def fetch_instance(class_name, attribute_name, *args, **kwargs):
+    """general fetches for class attributes by name and possibly initializing them"""
+    try:
+        return getattr(class_name, attribute_name)(*args, **kwargs)
+    except AttributeError as exc:
+        raise ValueError(f"Unsupported or invalid instance type: {class_name}") from exc
+
+
 def timeit(func):
     def wrapper(*args, **kwargs):
         start_time = time.time()
@@ -85,7 +93,7 @@ class SidakCorrectionMixin:
 
     @staticmethod
     def sidak_correction(df, p_val_column):
-        df[f"{p_val_column}_sidak"] = 1 - pow(1 - df[p_val_column].values, df["num_candidates"].values)
+        df[f"sidak_{p_val_column}"] = 1 - pow(1 - df[p_val_column].values, df["num_candidates"].values)
         return df
 
 

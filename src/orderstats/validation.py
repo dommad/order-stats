@@ -1,13 +1,15 @@
-from typing import Generator
+from typing import Generator, List
 import numpy as np
 import pandas as pd
 from . import parsers
-from .initializer import *
-from .models import *
-from .utils import ParserError
+from . import initializer
+from .utils import ParserError, PValueCalculator, SidakCorrectionMixin, calculate_tev, TH_BETA, TH_N0
 from .fdr import FDRCalculator, BenjaminiHochberg
 from . import cythonized as cyt
 
+
+CONFIDENCE_INTERVAL_ALPHA = 0.32
+NUM_FDR_THRESHOLDS = 100
 
 
 
@@ -15,27 +17,45 @@ class Validation:
     """Validation"""
 
 
-    @staticmethod
-    def get_ground_truth_label(file_name, file_tags):
-        file_type = next((key for key in file_tags.keys() if key in file_name.lower()), 'random')
-        return file_tags[file_type]
+    def __init__(self, decoy_model, lower_order_model, cdd_model, cdd_params, lower_params, fdr_method: FDRCalculator, filter_score, n_rep) -> None:
+
+        self.decoy_model = decoy_model
+        self.lower_order_model = lower_order_model
+        self.cdd_model = cdd_model
+        self.cdd_params = cdd_params
+        self.lower_params = lower_params
+        self.fdr_method = fdr_method
+        self.n_rep = n_rep
+        self.filter_score = filter_score
+
+    
+    def fetch_instance(self, class_name, attribute_name, *args, **kwargs):
+        """general fetches for class attributes by name and possibly initializing them"""
+        try:
+            return getattr(class_name, attribute_name)(*args, **kwargs)
+        except AttributeError as exc:
+            raise ValueError(f"Unsupported or invalid instance type: {class_name}") from exc
 
     @staticmethod
-    def add_ground_truth_label(df, file_tag):
+    def get_ground_truth_label(file_name, file_tags):
+        """Extracting ground truth label based on the name of the file"""
+        label = next((k for k in file_tags.keys() if k in file_name.lower()), 'unidentified')
+        return file_tags[label]
+
+    @staticmethod
+    def add_ground_truth_label(df: pd.DataFrame, file_tag: int) -> pd.DataFrame:
+        """Adding ground truth label to the dataframe"""
         df['gt_label'] = file_tag * np.ones(len(df))
         return df
 
 
-    def parse_all_files(self, input_files, engine):
+    def parse_all_files(self, input_files: List[str], engine: str) -> pd.DataFrame:
+        """Helper function to parse all files"""
 
-        ground_truth_tags = {'pos': 1, 'decoy': 2, 'negative': 0}
-
-        try:
-            parser_instance = getattr(parsers, f"{engine}Parser")()
-        except AttributeError as exc:
-            raise ValueError(f"Unsupported or invalid engine: {engine}") from exc
-
-
+        # TODO: this should be customizable by the user in config file
+        ground_truth_tags = {'pos': 1, 'decoy': 2, 'negative': 0, 'unidentified': 3}
+        parser_instance = self.fetch_instance(parsers, f"{engine}Parser", )
+     
         all_dfs = []
 
         for file in input_files:
@@ -50,61 +70,82 @@ class Validation:
 
             psms_df = self.add_ground_truth_label(psms_df, file_tag)
             all_dfs.append(psms_df)
-        
+
         master_df = pd.concat(all_dfs, axis=0, ignore_index=True)
         return master_df
 
 
+    def calculate_p_values(self, df_to_modify: pd.DataFrame, model: PValueCalculator, sidak: bool = False, param_df: pd.DataFrame = None, parameters_file: str = None):
+        """Initialize model and use it to calculate p-values for the provided dataframe"""
+        
+        if param_df is not None:
+            init_instance = self.fetch_instance(initializer, f"{model.__name__}Initializer", param_df, self.filter_score)
+        elif parameters_file is not None:
+            init_instance = self.fetch_instance(initializer, f"{model.__name__}Initializer", parameters_file)
+        else:
+            raise ValueError("No dataframe or parameters file provided, so cannot initialize the model for p-value calculation.")
+        
+        init_instance.initialize()
+        df_with_pvs, pv_column_name = model.calculate_p_value(df_to_modify, self.filter_score, init_instance.param_dict)
+
+        if issubclass(model, SidakCorrectionMixin) and sidak:
+            df_with_pvs = model.sidak_correction(df_with_pvs, pv_column_name)
+
+        return df_with_pvs
+    
+
+    def initialize_and_run_bootstrap(self, df, p_value_column):
+        """Initialize the Bootstrap instance and run the bootstrap"""
+        bootstrap_instance = Bootstrap(initializer.BootstrapInitializer, self.fdr_method, p_value_column)
+        return bootstrap_instance.run_bootstrap(df, self.n_rep)
 
  
-    def execute_validation(self, input_file_paths: list, score: str, bootstrap_reps=500, ext_params: dict = None, engine: str = 'Tide', plot=False):
+    def execute_validation(self, input_file_paths: list, engine: str = 'Tide'):
         """read the pepxml, automatically add the p-values based on lower order estimates"""
 
-        if ext_params:
-            self.params_est = ext_params
-
-
-        #PARSING FILES
-
-        # TODO: support all search engines and format, not just Comet and Tide, eliminate "mode"
-        # this parsing function must be able to process target-only, randomized, decoy-only files 
-        # and produce tev scores, charges, lower_order_pvalues, coute (Sidak) p_values, ground_truth_labels, i.e., labels for target, decoy, random
-        #tev_scores, charges, lower_order_pvalues, coute_pvs, labels = self.__parse_get_pvals(input_files, self.params_est, option=mode)
         master_df = self.parse_all_files(input_file_paths, engine)
-        # master_df.columns = ['tev', 'charge', 'hit_rank', 'lower_order_pv', 'coute(sidak)_pv', 'label', ...]
+        master_df = master_df[master_df['hit_rank'] == 1]
+        master_df['tev'] = calculate_tev(master_df, -TH_BETA, TH_N0)
+        master_df.loc[(master_df.gt_label == 1) & (master_df.tev < 0.3), 'gt_label'] = 2 # just for testing
+        master_df = self.calculate_p_values(master_df, self.decoy_model, param_df=master_df[master_df['gt_label'] == 2], sidak=True)
+        master_df = self.calculate_p_values(master_df, self.lower_order_model, sidak=True, parameters_file=self.lower_params)
+        master_df = self.calculate_p_values(master_df, self.cdd_model, sidak=True, parameters_file=self.cdd_params)
 
-        decoy_initializer = DecoyModelInitializer(master_df[master_df['gt_label'] == 2], score)
-        decoy_initializer.initialize()
-        master_df = DecoyModel().calculate_p_value(master_df, score, decoy_initializer.param_dict)
-
-        # repeat for lower-order model and CDD model, eventually abstract out to separate class
-        
         # alternatively, pi_0 can be estimated as outlined in Jiang and Doerge (2008):
         # pi_0 = PiZeroEstimator().find_optimal_pi0(low_pvs, 10)
-        bootstrap_results=Bootstrap(BootstrapInitializer, BenjaminiHochberg).run_bootstrap(master_df, 200)
+        # add pi_0 adjustment for benjamini hochberg
+
+        bootstrap_results = self.initialize_and_run_bootstrap(master_df, 'CDD_p_value')
         tprs, fdps = ProcessBootstrapResults.extract_fdps_tprs(bootstrap_results)
 
-        bootstrap_stats = ConfidenceInterval().calculate_all_confidence_intervals(fdps, tprs, 0.32, 100)
+        bootstrap_stats = ConfidenceInterval().calculate_all_confidence_intervals(fdps, tprs, CONFIDENCE_INTERVAL_ALPHA, NUM_FDR_THRESHOLDS)
 
-        return bootstrap_stats
+        return bootstrap_stats, master_df
+
 
 
 class Bootstrap:
+    """Bootstrap"""
     
-    def __init__(self, initializer: Initializer, fdr_calculator: FDRCalculator) -> None:
-        self.initializer = initializer
+    def __init__(self, init: initializer.Initializer, fdr_calculator: FDRCalculator, p_value_column: str) -> None:
+        self.init = init
         self.fdr_calculator = fdr_calculator
+        self.p_value_column = p_value_column
 
 
     def run_bootstrap(self, df, n_rep):
-        df_sorted, critical_array, pos_label, neg_label = self.initializer.initialize(df, n_rep)
-        return (self.fdr_calculator.calculate_fdp_tpr(next(df_sorted), critical_array, pos_label, neg_label) for _ in range(n_rep))
+        """main method to run bootstrap"""
+        df_sorted, critical_array, pos_label, neg_label = self.init.initialize(df, n_rep)
+        return (self.fdr_calculator.calculate_fdp_tpr(next(df_sorted), self.p_value_column, critical_array, pos_label, neg_label) for _ in range(n_rep))
+
 
 
 class ProcessBootstrapResults:
+    """Processing Bootstrap results"""
 
     @staticmethod
     def extract_fdps_tprs(results: Generator):
+        """extract FDP and TPR values from the bootstrapping output"""
 
         fdps = []
         tprs = []
@@ -124,6 +165,7 @@ class ProcessBootstrapResults:
         
 
 class ConfidenceInterval:
+    """Calculating confidence intervals on the bootstrapped FDR and FDP"""
 
     def __init__(self) -> None:
         pass
@@ -146,6 +188,7 @@ class ConfidenceInterval:
     
 
     def calculate_all_confidence_intervals(self, fdps, tprs, alpha, num_fdr_thresholds):
+        """calculate CIs for both FDP and TPR"""
         fdp_cis = list(self.get_confidence_interval_cython(fdps, x, alpha) for x in range(num_fdr_thresholds))
         tpr_cis = list(self.get_confidence_interval_cython(tprs, x, alpha) for x in range(num_fdr_thresholds))
 

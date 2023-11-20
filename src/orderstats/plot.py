@@ -1,3 +1,7 @@
+"""Plotting results of all analyses"""
+from typing import Tuple, List
+import pandas as pd
+import seaborn as sns
 import matplotlib.pyplot as plt
 import numpy as np
 from KDEpy import FFTKDE
@@ -5,8 +9,7 @@ from . import stat
 from .utils import largest_factors
 from .estimation import ParametersData
 from .optimization_modes import LinearRegressionMode
-from typing import Tuple
-import pandas as pd
+
 
 
 TH_N0 = 1000.
@@ -245,6 +248,30 @@ class Plotting:
 
 class PlotValidation:
 
+    @staticmethod
+    def plot_fdp_fdr_cis(fdps: List[Tuple], pi_zero):
+        """Plotting the FDR vs. estimated FDP + bootstrapped CIs"""
+
+        plt.style.use('ggplot')
+        plt.rcParams.update({'font.size': 12, 'font.family': 'Helvetica',
+                                'xtick.labelsize': 10, 'ytick.labelsize': 10})
+
+        support = np.linspace(0.001, 0.1, 100)
+        means, upper_lims, lower_lims = list(np.array(x) for x in zip(*fdps))
+
+        sns.lineplot(x=support, y=pi_zero * means, label='Mean')
+        sns.lineplot(x=[0, 0.1], y=[0, 0.1], linestyle='--', color='gray')
+        plt.fill_between(support, pi_zero * upper_lims, pi_zero * lower_lims, color='royalblue', alpha=0.3, label='CI')
+        
+        plt.xlim(0, 0.1)
+        plt.ylim(0, 0.1)
+        # Customize the plot
+        plt.xlabel('Estimated FDR')
+        plt.ylabel('FDP')
+        plt.title('Mean and Confidence Intervals')
+        plt.legend()
+
+
     def __plot_boot_fdrs(self, axs, all_stats, pi_0):
         """plotting bootstrap FDP vs FDR"""
 
@@ -310,7 +337,7 @@ class PlotValidation:
         self.__plot_boot_tps(axs[1], all_boot_stats)
         fig.tight_layout()
 
-        fig.savefig(f"./graphs/{self.out}_validation.png", dpi=600, bbox_inches='tight')
+        fig.savefig(f"./graphs/out_validation.png", dpi=600, bbox_inches='tight')
 
 
     @staticmethod

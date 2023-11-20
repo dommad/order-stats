@@ -1,33 +1,67 @@
 """Full analysis of pepxml file using lower order statistics"""
-from .utils import *
-from . import parsers
-from .initializer import Initializer
-from .estimators import *
-from .optimization_modes import *
+import argparse
+import configparser
+from .utils import TH_BETA, TH_N0, calculate_tev
+from .initializer import Initializer, EstimationInitializer
+from .estimation import Processor
+from .exporter import Exporter
 
 
-def run_estimation(engine, input_file, cutoff_filter, df_processor, init: Initializer):
-    # parsing
+
+def fetch_instance(class_name, attribute_name, *args, **kwargs):
+    """general fetches for class attributes by name and possibly initializing them"""
     try:
-        parser_instance = getattr(parsers, f"{engine}Parser")()
-    except AttributeError:
-        raise ValueError(f"Unsupported or invalid engine: {engine}")
+        return getattr(class_name, attribute_name)(*args, **kwargs)
+    except AttributeError as exc:
+        raise ValueError(f"Unsupported or invalid instance type: {class_name}") from exc
+    
 
-    filter_score = 'tev'
+def run_estimation(config_file_path,
+                   input_file,
+                   df_processor: Processor,
+                   init: Initializer):
+    """The main function running estimation of distribution parameters
+    for top-scoring target PSMs using lower-order statistics"""
 
-    parser_instance = init.initialize_parser(engine)
-    df = parser_instance.parse(input_file)
-    df['tev'] = calculate_tev(df, -TH_BETA, TH_N0, engine)
+    with open(config_file_path, 'r', encoding='utf-8') as config_file:
+        config = configparser.ConfigParser()
+        config.read_file(config_file)
 
-    parameter_estimators = init.initialize_parameter_estimators(AsymptoticGumbelMLE, MethodOfMomentsEstimator)
-    para_init = init.initialize_param_processing(df, df_processor, filter_score)
+    df_processor = fetch_instance(Processor, df_processor, None)
+    init = EstimationInitializer(config, df_processor)
 
+    parser = init.initialize_parser()
+    df = parser.parse(input_file)
+    df['tev'] = calculate_tev(df, -TH_BETA, TH_N0)
+
+
+    parameter_estimators = init.initialize_parameter_estimators()
+    para_init = init.initialize_param_processing(df)
     param_data = para_init.process_parameters_into_charge_dicts(parameter_estimators)
 
-    optimal_finder = init.initialize_optimal_models_finder(param_data, filter_score)
-    sel_find_modes = init.initialize_optimization_modes(LinearRegressionMode, MeanBetaMode)
+    opt_finder = init.initialize_optimal_models_finder(param_data)
+    opt_modes = init.initialize_optimization_modes()
 
-    optimal_results = optimal_finder.find_parameters_for_best_estimation_optimization(df, df_processor, cutoff_filter, sel_find_modes)
-    best_params = optimal_finder.get_charge_best_combination_dict(optimal_results)
+    optimal_results = opt_finder.find_parameters_for_best_estimation_optimization(df, df_processor, opt_modes)
+    best_params = opt_finder.get_charge_best_combination_dict(optimal_results)
 
-    return best_params
+    exporter = fetch_instance(Exporter, f"{config.get('estimation', 'exporter', fallback='PeptideProphet')}Exporter", None)
+    exporter(config.get('general', 'outname', fallback="example")).export_parameters(best_params)
+
+    return best_params, param_data, df
+
+
+
+if __name__ == "__main__":
+
+    arg_parser = argparse.ArgumentParser(description='Lower-Order Statistics for FDR Estimation in Shotgun Proteomics')
+    arg_parser.add_argument('-conf', '--configuration_file', required=True, type=str,
+                            help="Configuration file in TOML format")
+    arg_parser.add_argument('-p',  '--positives_file', required=True,
+                        type=str, help='file(s) with positive ground truth samples (accepted format: pep.xml, tsv, txt, mzid)')
+    arg_parser.add_argument('-n', '--negatives_file', required=True,
+                        type=str, help="file(s) with negative ground truth samples (accepted format: pep.xml, tsv, txt, mzid")
+    arg_parser.add_argument('-d',  '--decoys_file', required=True,
+                        type=str, help='file(s) with results of decoy-only search (accepted format: pep.xml, tsv, txt, mzid)')
+
+    args = arg_parser.parse_args()

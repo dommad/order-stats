@@ -57,6 +57,7 @@ class PiZeroEstimator(ABC):
         pass
 
 
+
 class BootstrapPiZero(PiZeroEstimator):
     """estimate pi0 for given set of p-values"""
 

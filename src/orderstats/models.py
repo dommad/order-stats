@@ -6,31 +6,42 @@ from . import stat
 
 
 
-class CDDModel(PValueCalculator):
+class CDDModel(PValueCalculator, SidakCorrectionMixin):
 
-    def calculate_p_value(self, df_to_modify, score_column, param_dict):
+    @staticmethod
+    def calculate_p_value(df_to_modify, score_column, param_dict):
+
+        pv_column_name = 'CDD_p_value'
         group = df_to_modify[df_to_modify['hit_rank'] == 1].groupby('charge')[score_column]
         for label, items in group:
-            df_to_modify.loc[items.index, 'CDD_p_value'] = 1 - st.gumbel_r.cdf(items.values, *param_dict[label])
-        return df_to_modify
+            df_to_modify.loc[items.index, pv_column_name] = 1 - st.gumbel_r.cdf(items.values, *param_dict[label])
+        return df_to_modify, pv_column_name
     
 
 class DecoyModel(PValueCalculator, SidakCorrectionMixin):
 
-    def calculate_p_value(self, df_to_modify, score_column, param_dict):
+    @staticmethod
+    def calculate_p_value(df_to_modify, score_column, param_dict):
+        
+        pv_column_name = 'decoy_p_value'
         group = df_to_modify[df_to_modify['hit_rank'] == 1].groupby('charge')[score_column]
         for label, items in group:
-            df_to_modify.loc[items.index, 'decoy_p_value'] = 1 - st.gumbel_r.cdf(items.values, *param_dict[label])
-        return df_to_modify
+            df_to_modify.loc[items.index, pv_column_name] = 1 - st.gumbel_r.cdf(items.values, *param_dict[label])
+        
+        return df_to_modify, pv_column_name
     
 
 class LowerOrderModel(PValueCalculator, SidakCorrectionMixin):
 
-    def calculate_p_value(self, df_to_modify, score_column, param_dict):
+    @staticmethod
+    def calculate_p_value(df_to_modify, score_column, param_dict):
+        
+        pv_column_name = 'lower_model_p_value'
         group = df_to_modify[df_to_modify['hit_rank'] == 1].groupby('charge')[score_column]
         for label, items in group:
-            df_to_modify.loc[items.index, 'lower_model_p_value'] = 1 - st.gumbel_r.cdf(items.values, *param_dict[label])
-        return df_to_modify
+            df_to_modify.loc[items.index, pv_column_name] = 1 - st.gumbel_r.cdf(items.values, *param_dict[label])
+        
+        return df_to_modify, pv_column_name
     
 
 class EMPosteriorModel:

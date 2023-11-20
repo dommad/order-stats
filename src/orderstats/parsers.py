@@ -239,14 +239,14 @@ class ParamFileParser:
 
     def __init__(self, param_input) -> None:
         self.param_input = param_input
-        self.param_dict: dict = {}
     
-    def read_param_file(self):
-
+    def parse(self):
+        param_dict = {}
         with open(self.param_input, 'r', encoding='utf-8') as file:
             lines = file.readlines()
     
             for idx, line in enumerate(lines, 1):
                 params = line.rstrip().split(' ')
                 params = tuple(float(x) for x in params)
-                self.param_dict[idx] = params
+                param_dict[idx] = params
+        return param_dict

@@ -3,8 +3,11 @@ from typing import Union
 import pandas as pd
 import scipy.stats as st
 import numpy as np
-from .estimation import OptimalModelsFinder, ParametersProcessing
+from .estimation import OptimalModelsFinder, ParametersProcessing, ParametersEstimator
+from .optimization_modes import ParameterOptimizationMode
 from . import parsers
+from .utils import fetch_instance
+from configparser import ConfigParser
 
 
 
@@ -17,10 +20,12 @@ class Initializer:
 
 class EstimationInitializer:
 
-    def __init__(self, engine, df_processor, filter_score) -> None:
-        self.engine = engine
+    def __init__(self, config: ConfigParser, df_processor) -> None:
+        self.config = config
+        self.engine = config.get('general', 'engine', fallback='Tide')
+        self.filter_score = config.get('general', 'filter_score', fallback='tev')
         self.df_processor = df_processor
-        self.filter_score = filter_score
+
 
     def initialize_parser(self):
         try:
@@ -30,17 +35,27 @@ class EstimationInitializer:
 
         #return getattr(parsers, f"{self.engine}Parser")()
 
-    def initialize_parameter_estimators(self, *args):
-        return args
+
+    def initialize_parameter_estimators(self):
+        estimators = self.config.get('estimation', 'estimators').strip().split(', ')
+        # TODO: add error handling
+        estimator_objects = [fetch_instance(ParametersEstimator, x, None) for x in estimators]
+        return estimator_objects
+
 
     def initialize_param_processing(self, df):
-        return ParametersProcessing(df, self.df_processor, self.filter_score)
+        return ParametersProcessing(self.config, df, self.df_processor, self.filter_score)
+
 
     def initialize_optimal_models_finder(self, param_dict):
-        return OptimalModelsFinder(param_dict, self.filter_score)
+        return OptimalModelsFinder(self.config, param_dict, self.filter_score)
 
-    def initialize_optimization_modes(self, *args):
-        return args
+
+    def initialize_optimization_modes(self):
+        optimization_modes = self.config.get('estimation', 'optimization_modes').strip().split(', ')
+        # TODO: add error handling
+        optimization_objects = [fetch_instance(ParameterOptimizationMode, x, None) for x in optimization_modes]
+        return optimization_objects
     
 
 class ModelInitializer(ABC):
@@ -58,7 +73,7 @@ class CDDModelInitializer(ModelInitializer):
 
     def initialize(self):
         if isinstance(self.param_input, str):
-            parsers.ParamFileParser(self.param_input).read_param_file()
+            self.param_dict = parsers.ParamFileParser(self.param_input).parse()
         elif isinstance(self.param_input, pd.DataFrame):
             self.param_dict = self.param_input
         else:
@@ -81,14 +96,14 @@ class DecoyModelInitializer(ModelInitializer):
 
 class LowerOrderModelInitializer(ModelInitializer):
 
-    def __init__(self, parameters: Union[str, pd.DataFrame], score_column) -> None:
+    def __init__(self, parameters: Union[str, pd.DataFrame]) -> None:
         self.param_input = parameters
-        self.score_column = score_column
         self.param_dict = {}
 
     def initialize(self):
         if isinstance(self.param_input, str):
-            parsers.ParamFileParser(self.param_input).read_param_file()
+            self.param_dict = parsers.ParamFileParser(self.param_input).parse()
+        # it's possible for the user to provide parameters directly as pandas dataframe
         elif isinstance(self.param_input, pd.DataFrame):
             self.param_dict = self.param_input
         else:
