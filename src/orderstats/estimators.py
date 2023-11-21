@@ -21,7 +21,7 @@ class ParametersEstimator(ABC, metaclass=ParametersEstimatorMeta):
         pass
 
 
-class MethodOfMomentsEstimator(ParametersEstimator):
+class MethodOfMoments(ParametersEstimator):
 
     def __init__(self, scores, hit_index) -> None:
         super().__init__(scores, hit_index)
@@ -163,7 +163,7 @@ class TruePiZero(PiZeroEstimator):
 
     @staticmethod
     def calculate_pi_zero(df):
-        pi_0 = len(df[np.where(df.labels == 0)])/len(df[np.where(df.labels != 2)])
+        pi_0 = df['gt_label'].value_counts().get(0, 0) / len(df['gt_label'])
         return pi_0
 
 

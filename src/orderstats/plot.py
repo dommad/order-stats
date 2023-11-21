@@ -7,14 +7,11 @@ import numpy as np
 from KDEpy import FFTKDE
 from . import stat
 from .utils import largest_factors
+from .constants import TH_BETA, TH_MU
 from .estimation import ParametersData
 from .optimization_modes import LinearRegressionMode
 
 
-
-TH_N0 = 1000.
-TH_MU = 0.02 * np.log(TH_N0)
-TH_BETA = 0.02
 
 class Plotting:
     """Plotting functionalities for the analysis of lower-order models"""
@@ -23,7 +20,7 @@ class Plotting:
         self.out_name = out_name
 
         plt.style.use('ggplot')
-        plt.rcParams.update({'font.size': 13, 'font.family': 'Helvetica',
+        plt.rcParams.update({'font.size': 12, 'font.family': 'Arial',
                              'xtick.labelsize': 10, 'ytick.labelsize': 10})
 
 
@@ -249,116 +246,60 @@ class Plotting:
 class PlotValidation:
 
     @staticmethod
-    def plot_fdp_fdr_cis(fdps: List[Tuple], pi_zero):
+    def plot_fdp_fdr_cis(axs, fdps: List[Tuple]):
         """Plotting the FDR vs. estimated FDP + bootstrapped CIs"""
 
+        cs_ = ['#2D58B8', '#D65215', '#2CB199', '#7600bc']
+
         plt.style.use('ggplot')
-        plt.rcParams.update({'font.size': 12, 'font.family': 'Helvetica',
+        plt.rcParams.update({'font.size': 12, 'font.family': 'Arial',
                                 'xtick.labelsize': 10, 'ytick.labelsize': 10})
 
-        support = np.linspace(0.001, 0.1, 100)
+        support = np.linspace(0.001, 0.1, 100) # TODO: abstract out
         means, upper_lims, lower_lims = list(np.array(x) for x in zip(*fdps))
 
-        sns.lineplot(x=support, y=pi_zero * means, label='Mean')
-        sns.lineplot(x=[0, 0.1], y=[0, 0.1], linestyle='--', color='gray')
-        plt.fill_between(support, pi_zero * upper_lims, pi_zero * lower_lims, color='royalblue', alpha=0.3, label='CI')
-        
-        plt.xlim(0, 0.1)
-        plt.ylim(0, 0.1)
+        sns.lineplot(x=support, y=means, label='Mean', color='#2D58B8',ax=axs)
+        sns.lineplot(x=[0, 0.1], y=[0, 0.1], linestyle='--', color='gray', ax=axs)
+        axs.fill_between(support, upper_lims, lower_lims, color='royalblue', alpha=0.3, label='CI')
+
+        axs.set_xlim(0, 0.1)
+        axs.set_ylim(0, 0.1)
         # Customize the plot
-        plt.xlabel('Estimated FDR')
-        plt.ylabel('FDP')
-        plt.title('Mean and Confidence Intervals')
+        axs.set_xlabel('Estimated False Discovery Rate')
+        axs.set_ylabel('False Discovery Proportion')
         plt.legend()
 
 
-    def __plot_boot_fdrs(self, axs, all_stats, pi_0):
-        """plotting bootstrap FDP vs FDR"""
-
-        cs_ = ['#2D58B8', '#D65215', '#2CB199', '#7600bc']
-
-        for method in range(len(all_stats[0])):
-            fdrs = all_stats[0][method][0][0,:]
-            fdps = all_stats[0][method][1]
-            if method == 0:
-                self.__plot_fdr_stat(axs, pi_0*fdrs, np.array(fdps), cs_[method], xy_=1)
-            else:
-                self.__plot_fdr_stat(axs, pi_0*fdrs, np.array(fdps), cs_[method])
-
-        axs.set_xlabel("FDR")
-        axs.set_ylabel("FDP")
-
-
-    def __plot_boot_tps(self, axs, all_stats):
-        """plot boostrap # identified PSMs"""
-        cs_ = ['#2D58B8', '#D65215', '#2CB199', '#7600bc']
-
-        for method in range(len(all_stats[0])):
-            fdrs = all_stats[0][method][0][0,:]
-            tps = all_stats[0][method][2]
-            if method == 0:
-                self.__plot_fdr_stat(axs, fdrs, tps, cs_[method], axis_t="TPR")
-            else:
-                self.__plot_fdr_stat(axs, fdrs, tps, cs_[method], axis_t="TPR")
-
-        axs.set_xlabel("FDR")
-        axs.set_ylabel("Correctly identified PSMs")
-        axs.set_ylim(0,17000)
-        axs.set_xlim(0,0.1)
-
-
     @staticmethod
-    def __plot_fdr_stat(axs, fdrs, fdp_stats, col, xy_=False, axis_t='FDP'):
-        """plot FDP vs FDR - results of validation"""
-        #fdrs = np.linspace(0.0001, 0.1, 100)
+    def plot_tpr_fdr_cis(axs, tprs: List[Tuple]):
+        """Plotting the FDR vs. estimated FDP + bootstrapped CIs"""
 
-        if xy_:
-            axs.plot([0.0001,0.1], [0.0001, 0.1], c='gray')
+        cs_ = ['#2D58B8', '#D65215', '#2CB199', '#7600bc']
 
-        axs.plot(fdrs, fdp_stats[0,:], color=col, linewidth=2)
-        axs.fill_between(fdrs, fdp_stats[0,:], fdp_stats[2,:], alpha=0.2, color=col)
-        axs.fill_between(fdrs, fdp_stats[0,:], fdp_stats[1,:], alpha=0.2, color=col)
+        plt.style.use('ggplot')
+        plt.rcParams.update({'font.size': 12, 'font.family': 'Arial',
+                                'xtick.labelsize': 10, 'ytick.labelsize': 10})
+
+        support = np.linspace(0.001, 0.1, 100) # TODO: abstract out
+        means, upper_lims, lower_lims = list(np.array(x) for x in zip(*tprs))
+
+        sns.lineplot(x=support, y=means, label='Mean', color='#2D58B8', ax=axs)
+        #sns.lineplot(x=[0, 0.1], y=[0, 0.1], linestyle='--', color='gray', ax=axs)
+        axs.fill_between(support, upper_lims, lower_lims, color='royalblue', alpha=0.3, label='CI')
+
+        # Customize the plot
+        axs.set_ylabel('True Positive Rate')
+        axs.set_xlabel('False Discovery Rate')
+        plt.legend()
 
 
-        if axis_t == 'TPR':
-            axs.set_xlim(-0.001, 0.1)
-            axs.set_ylim(-0.01,)
-        else:
-            axs.set_xlim(-0.001, 0.1+0.001)
-            axs.set_ylim(-0.001, 0.1+0.001)
 
-
-
-    def plot_validation_results(self, all_boot_stats, pi_0):
+    def plot_validation_results(self, fdps, tprs):
         """Plot validation results"""
 
-        fig, axs = plt.subplots(1, 2, figsize=(6,3))
-        self.__plot_boot_fdrs(axs[0], all_boot_stats, pi_0)
-        self.__plot_boot_tps(axs[1], all_boot_stats)
+        fig, axs = plt.subplots(1, 2, figsize=(10, 5))
+        self.plot_fdp_fdr_cis(axs[0], fdps)
+        self.plot_tpr_fdr_cis(axs[1], tprs)
         fig.tight_layout()
 
-        fig.savefig(f"./graphs/out_validation.png", dpi=600, bbox_inches='tight')
-
-
-    @staticmethod
-    def plot_val_results(axs, fdrs, fdps, tps, lim, col1, col2):
-        """Plot both FDP and TP vs FDR in the same plot"""
-        #fig, ax = plt.subplots(figsize=(6,6))
-        #lim = 0.1
-        axs.grid(color='gray', linestyle='--', linewidth=1, alpha=0.2)
-        axs.plot(fdrs, fdps, color=col1)
-        axs.scatter(fdrs, fdps, marker='.', color=col1)
-        axs.set_ylabel("FDP")
-        ax2=axs.twinx()
-        #ax.plot(fdr, decs)
-        #ax.scatter(fdr, decs, marker='.')
-        ax2.plot(fdrs, tps, marker='.', color=col2)
-        ax2.set_ylabel("TPR", color=col2)
-        ax2.set_ylim(0,1)
-        axs.plot([0,lim], [0,lim], color='k', alpha=0.5)
-        axs.set_xlim(-0.001, lim)
-        axs.set_ylim(-0.001, lim)
-        #ax2.legend(['lower', 'decoys', 'x-y'])
-
-
-
+        fig.savefig(f"./fdp_tpr_fdr_validation.pdf", dpi=600, bbox_inches='tight')

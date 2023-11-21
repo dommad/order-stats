@@ -1,12 +1,10 @@
 """Estimation of distribution parameters based on lower-order TEV distributions"""
-from typing import List
+from typing import List, Type
 from dataclasses import dataclass
 import pandas as pd
-from .utils import *
 from .estimators import ParametersEstimator
 from .optimization_modes import ParameterOptimizationMode
-from .cutoff_finder import CutoffFinder
-# from .exporter import Exporter
+from . import cutoff_finder
 
 
 @dataclass
@@ -21,36 +19,40 @@ class ParametersData:
 class Processor:
     pass
 
+
 class DataFrameProcessor(Processor):
 
     def __init__(self) -> None:
         pass
 
-    def get_available_hits(self, df):
+    @staticmethod
+    def get_available_hits(df):
         all_hit_ranks = df.drop_duplicates('hit_rank')['hit_rank'].values
         all_hit_ranks = all_hit_ranks[all_hit_ranks != 1] # skip top hit since it may contain some correct IDs
         return all_hit_ranks
     
-
-    def extract_selected_hit(self, df, hit):
+    @staticmethod
+    def extract_selected_hit(df, hit):
 
         df_hit = df[df['hit_rank'] == hit]
         #hit_scores = df_hit[df_hit[filter_score] > 0.01][filter_score]
         #hit_df = df_hit[df_hit[filter_score] > 0.01][filter_score] # dommad
         return df_hit
-    
-    def extract_hit_scores(self, df, score, hit):
+
+    @staticmethod
+    def extract_hit_scores(df, score, hit):
         return df.loc[df['hit_rank'].values == hit, score].values
     
- 
-    def get_available_charges(self, df):
+    @staticmethod
+    def get_available_charges(df):
         return df.drop_duplicates('charge')['charge'].values
     
-
-    def get_psms_by_charge(self, df, charge):
+    @staticmethod
+    def get_psms_by_charge(df, charge):
         return df[df['charge'].values == charge]
     
-    def get_scores_below_threshold(self, df, score_name, threshold):
+    @staticmethod
+    def get_scores_below_threshold(df, score_name, threshold):
         return df.loc[df[score_name].values < threshold, score_name].values
 
 
@@ -62,12 +64,12 @@ class OptimalModelsFinder:
         self.config = config
 
 
-    def find_parameters_for_best_estimation_optimization(self, df, df_processor: DataFrameProcessor, optimization_modes: List[ParameterOptimizationMode]):
+    def find_parameters_for_best_estimation_optimization(self, df, df_processor: DataFrameProcessor, optimization_modes: List[Type[ParameterOptimizationMode]]):
         """
         Selecting best combination of parameter estimator + finding method for each charge state
         """
-        cutoff_generator = fetch_instance(CutoffFinder, self.config.get('estimation', 'cutoff_finder').strip(), None)
-        top_hits = df_processor.extract_selected_hit(df, hit = 1)
+        cutoff_generator = getattr(cutoff_finder, f"{self.config.get('estimation', 'cutoff_finder').strip()}Cutoff")
+        top_hits = df_processor.extract_selected_hit(df, hit=1)
         
         optimal_results = {}
     
@@ -78,26 +80,24 @@ class OptimalModelsFinder:
             scores_below_cutoff = df_processor.get_scores_below_threshold(charge_hits, self.config.get('general', 'filter_score', fallback='tev'), cutoff)
 
             for p_estimator in self.p_data.parameter_estimators:
-                p_estimator_name = p_estimator.__name__ # it was str(p_estimator)
-                param_df = self.p_data.output_dict[charge][p_estimator_name]
+                param_df = self.p_data.output_dict[charge][p_estimator]
                 
                 for mode in optimization_modes:
-                    opt_mode_name = mode.__name__ # it was str(mode)
-                    current_opt_params = mode(param_df).find_optimal_parameters(scores_below_cutoff, hit_rank=1) # TODO: make order flexible
-                    charge_dict[(p_estimator_name, opt_mode_name)] = current_opt_params
+                    opt_mode_name = mode.__name__
+                    current_opt_params = mode(param_df).find_optimal_parameters(scores_below_cutoff, hit_rank=1)
+                    charge_dict[(p_estimator, opt_mode_name)] = current_opt_params
             
             optimal_results[charge] = charge_dict
 
         return optimal_results
 
 
-    def get_charge_best_combination_dict(self, optimal_results):
+    def get_charge_best_combination_dict(self, optimal_results: dict):
         
         best_parameters = {}
-        for charge in self.p_data.available_charges:
-            this_charge_results = optimal_results[charge]
-            best_key = min(this_charge_results, key=lambda k: this_charge_results[k][1])
-            best_parameters[charge] = (best_key, optimal_results[charge][best_key][0])
+        for charge, charge_results in optimal_results.items():
+            best_key = min(charge_results, key=lambda k: charge_results[k][1])
+            best_parameters[charge] = (best_key, charge_results[best_key][0])
 
         return best_parameters
 
@@ -112,7 +112,7 @@ class ParametersProcessing:
         self.config = config
 
 
-    def process_parameters_into_charge_dicts(self, parameter_estimators: List[ParametersEstimator]):
+    def process_parameters_into_charge_dicts(self, parameter_estimators: List[Type[ParametersEstimator]]):
         """calculate MLE and MM parameters using the data"""
 
         available_charges = self.df_processor.get_available_charges(self.df)
@@ -124,7 +124,7 @@ class ParametersProcessing:
             
             for p_estimator in parameter_estimators:
                 method_params = self.find_parameters_for_lower_hits(df_by_charge, p_estimator)
-                charge_dict[str(p_estimator)] = method_params
+                charge_dict[p_estimator.__name__] = method_params
 
             output_dict[charge] = charge_dict
 
@@ -136,18 +136,19 @@ class ParametersProcessing:
             )
 
 
-    def find_parameters_for_lower_hits(self, df_by_charge, parameter_estimator: ParametersEstimator):
+    def find_parameters_for_lower_hits(self, df_by_charge, p_estimator: ParametersEstimator):
         """Get parameters either from method of moments or from MLE"""
         
-        available_hits = self.df_processor.get_available_hits(df_by_charge)
-        parameters = {}
-    
-        for hit in available_hits:
-            hit_scores = self.df_processor.extract_hit_scores(df_by_charge, self.filter_score, hit)
-            hit_parameters = parameter_estimator(hit_scores, hit).estimate()
-            parameters[hit] = hit_parameters
-    
-        return pd.DataFrame.from_records(parameters, index=['location', 'scale'])
+        hits = self.df_processor.get_available_hits(df_by_charge)
+        params = dict((hit, self.get_params_for_hit(df_by_charge, p_estimator, hit)) for hit in hits)
+        return pd.DataFrame.from_records(params, index=['location', 'scale'])
+
+
+    def get_params_for_hit(self, df_by_charge, parameter_estimator, hit):
+        """Estimating parameters for the selected hit"""
+        hit_scores = self.df_processor.extract_hit_scores(df_by_charge, self.filter_score, hit)
+        hit_parameters = parameter_estimator(hit_scores, hit).estimate()
+        return hit_parameters
 
 
 # class LowerOrderEstimation:

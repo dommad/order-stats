@@ -1,3 +1,5 @@
+"""Methods to find cutoff threshold for fitting a model
+to the lower-scoring portion of the mixture distribution of top-scoring PSMs"""
 from abc import ABC, abstractmethod
 from KDEpy import FFTKDE
 import pandas as pd
@@ -21,30 +23,8 @@ class CutoffFinder(ABC):
         pass
 
 
-class MainDipCutoff(CutoffFinder):
 
-    def __init__(self, df: pd.DataFrame, filter_score: str) -> None:
-        super().__init__(df, filter_score)
-
-    def find_cutoff(self) -> float:
-        """
-        Find the main dip in the mixture distribution separating two components
-        """
-        scores = self.df[self.filter_score].values
-
-        if len(scores) == 0:
-            raise ValueError("Empty scores array. Unable to find cutoff.")
-
-        axes, kde = FFTKDE(bw=0.05, kernel='gaussian').fit(scores).evaluate(2**8)
-        dips = self.find_peaks_and_dips(axes, kde)
-
-        if len(dips) == 0:
-            main_dip = np.median(scores)
-        else:
-            main_dip = dips[max(0, int(len(dips / 2)) - 1)]
-        
-        return main_dip
-
+class PeakDipFinder:
 
     @staticmethod
     def find_peaks_and_dips(axes, kde):
@@ -58,24 +38,40 @@ class MainDipCutoff(CutoffFinder):
         - indices (array): Indices of peaks in the data.
         """
 
-        # peaks = []
-        dips = []
-        for i in range(1, len(kde) - 1):
-            # if kde[i] > kde[i - 1] and kde[i] > kde[i + 1]:
-            #     peaks.append(i)
-            if kde[i] < kde[i - 1] and kde[i] < kde[i + 1]:
-                dips.append(i)
+        # Compute differences between consecutive elements
+        diff = np.diff(kde)
 
-        if len(dips) == 0:
-            return []
-        else:
-            return axes[dips] #, axes[dips]
+        # Find indices of peaks and dips
+        # peaks = np.where((diff[:-1] > 0) & (diff[1:] <= 0))[0] + 1
+        dips = np.where((diff[:-1] < 0) & (diff[1:] >= 0))[0] + 1
+        
+        # dips = np.where((kde[1:-1] < kde[:-2]) & (kde[1:-1] < kde[2:]))[0] + 1
+        return axes[dips] # , axes[peaks]
+
+
+
+class MainDipCutoff(CutoffFinder, PeakDipFinder):
+    """Finding the cutoff by idenifying the main dip between negative and positive
+    components of the mixture distribution"""
+    # TODO: fix it, it doesn't work properly now
+
+    def find_cutoff(self) -> float:
+        """
+        Find the main dip in the mixture distribution separating two components
+        """
+        scores = self.df[self.filter_score].values
+
+        if len(scores) == 0:
+            raise ValueError("Empty scores array. Unable to find cutoff.")
+
+        axes, kde = FFTKDE(bw=0.05, kernel='gaussian').fit(scores).evaluate(2**8)
+        dips = self.find_peaks_and_dips(axes, kde)
+
+        return np.median(scores) if dips == [] else dips[max(0, int(len(dips / 2)) - 1)]
+
 
 
 class FixedCutoff(CutoffFinder):
 
-    def __init__(self, df, filter_score) -> None:
-        super().__init__(df, filter_score)
-
     def find_cutoff(self):
-        return 0.21
+        return 0.18

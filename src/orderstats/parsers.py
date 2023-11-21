@@ -2,6 +2,8 @@
 from abc import ABC, abstractmethod
 import xml.etree.ElementTree as ET
 import pandas as pd
+import numpy as np
+from .constants import TH_BETA, TH_N0
 from .utils import _is_numeric, ParserError
 
 FILE_FORMATS = ['pep.xml', 'txt', 'mzid']
@@ -60,10 +62,9 @@ class PSMParser(ABC):
 
             df = pd.DataFrame(get_spectrum_queries())
             df.rename(columns=self.rename_columns(), inplace=True)
-            df['is_decoy'] = [True if self.decoy_tag in row.protein.lower() else False for row in df.itertuples()]
-            df['modifications'] = df.apply(lambda row: (row['position'], row['mass']), axis=1)
+            df['modifications'] = list(zip(df['position'], df['mass']))
 
-            return df
+            return self.add_extra_columns(df)
         
         except ParserError as err:
             print(f"Error parsing file: {err}")
@@ -78,11 +79,12 @@ class PSMParser(ABC):
         master_dict = {}
         for item in spectrum_info:
             cur_dict = item.attrib
-            if all(key in cur_dict for key in ['name', 'value']):
-                master_dict.update({cur_dict['name']: cur_dict['value']})
+            #if all(key in cur_dict for key in ['name', 'value']):
+            if 'name' in cur_dict and 'value' in cur_dict:
+                master_dict[cur_dict['name']] = cur_dict['value']
                 del cur_dict['name']
                 del cur_dict['value']
-            
+
             master_dict.update(cur_dict)
 
         return self.turn_strings_into_floats(master_dict)
@@ -93,8 +95,8 @@ class PSMParser(ABC):
         df = pd.read_csv(file_name, sep=sep)
         # renaming will be handled by individual engines
         df.rename(columns=self.rename_columns(), inplace=True)
-        df['is_decoy'] = [True if self.decoy_tag in row.protein.lower() else False for row in df.itertuples()]
-        return df
+
+        return self.add_extra_columns(df)
 
 
     def parse_mzid(self, xml_file_path):
@@ -147,9 +149,37 @@ class PSMParser(ABC):
         # Create a DataFrame
         df = pd.DataFrame(get_spectra())
         df.rename(columns=self.rename_columns(), inplace=True)
-        df['is_decoy'] = [True if self.decoy_tag in row.protein else False for row in df.itertuples()]
+
+        return self.add_extra_columns(df)
+
+
+    def add_extra_columns(self, df):
+
+        df.loc[:, 'is_decoy'] = df['protein'].str.lower().str.contains(self.decoy_tag)
+        df.loc[:, 'tev'] = self.calculate_tev(df, -TH_BETA, TH_N0)
 
         return df
+
+
+    @staticmethod
+    def calculate_tev(df: pd.DataFrame, par_a: float, par_n0: float) -> pd.Series:
+        """
+        Calculate the log-transformed e-value (TEV) score based on the given parameters.
+
+        Parameters:
+        - df (pd.DataFrame): Input DataFrame containing relevant information.
+        - par_a (float): The 'a' parameter used in TEV score calculation.
+        - par_n0 (float): The 'N0' parameter used in TEV score calculation.
+
+        Returns:
+        np.ndarray: An array containing TEV scores for each row in the DataFrame.
+        """
+
+        if 'e_value' in df.columns:
+            return par_a * np.log(df['e_value'] / par_n0)
+
+        return par_a * np.log(df['p_value'] * df['num_candidates'] / par_n0)
+
 
 
 class CometParser(PSMParser):

@@ -19,7 +19,7 @@ class BenjaminiHochberg(FDRCalculator):
 
         df_labels = df_sorted['gt_label'].to_numpy()
         sorted_pvals = df_sorted[p_value_column].to_numpy()
-        len_df_correct_labels = len(df_labels[df_labels == 0])
+        len_df_correct_labels = len(df_labels[df_labels == pos_label])
         masks = [sorted_pvals <= x for x in critical_array]
         bh_gt_labels = [df_labels[mask] for mask in masks]
 

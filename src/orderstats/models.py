@@ -1,15 +1,29 @@
 """Null models for calculation of p-values in hypothesis testing"""
+from abc import ABC, abstractmethod
 import scipy.stats as st
 import numpy as np
-from .utils import PValueCalculator, SidakCorrectionMixin
 from . import stat
 
+
+class PValueCalculator(ABC):
+
+    @abstractmethod
+    def calculate_and_add_p_values(self, df_to_modify, score_column, param_dict):
+        pass
+
+
+class SidakCorrectionMixin:
+
+    @staticmethod
+    def sidak_correction(df, p_val_column):
+        df[f"sidak_{p_val_column}"] = 1 - pow(1 - df[p_val_column].values, df["num_candidates"].values)
+        return df
 
 
 class CDDModel(PValueCalculator, SidakCorrectionMixin):
 
     @staticmethod
-    def calculate_p_value(df_to_modify, score_column, param_dict):
+    def calculate_and_add_p_values(df_to_modify, score_column, param_dict):
 
         pv_column_name = 'CDD_p_value'
         group = df_to_modify[df_to_modify['hit_rank'] == 1].groupby('charge')[score_column]
@@ -21,9 +35,9 @@ class CDDModel(PValueCalculator, SidakCorrectionMixin):
 class DecoyModel(PValueCalculator, SidakCorrectionMixin):
 
     @staticmethod
-    def calculate_p_value(df_to_modify, score_column, param_dict):
+    def calculate_and_add_p_values(df_to_modify, score_column, param_dict):
         
-        pv_column_name = 'decoy_p_value'
+        pv_column_name = 'Decoy_p_value'
         group = df_to_modify[df_to_modify['hit_rank'] == 1].groupby('charge')[score_column]
         for label, items in group:
             df_to_modify.loc[items.index, pv_column_name] = 1 - st.gumbel_r.cdf(items.values, *param_dict[label])
@@ -34,9 +48,9 @@ class DecoyModel(PValueCalculator, SidakCorrectionMixin):
 class LowerOrderModel(PValueCalculator, SidakCorrectionMixin):
 
     @staticmethod
-    def calculate_p_value(df_to_modify, score_column, param_dict):
+    def calculate_and_add_p_values(df_to_modify, score_column, param_dict):
         
-        pv_column_name = 'lower_model_p_value'
+        pv_column_name = 'LowerOrder_p_value'
         group = df_to_modify[df_to_modify['hit_rank'] == 1].groupby('charge')[score_column]
         for label, items in group:
             df_to_modify.loc[items.index, pv_column_name] = 1 - st.gumbel_r.cdf(items.values, *param_dict[label])

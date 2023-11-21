@@ -3,12 +3,11 @@ from typing import Union
 import pandas as pd
 import scipy.stats as st
 import numpy as np
-from .estimation import OptimalModelsFinder, ParametersProcessing, ParametersEstimator
-from .optimization_modes import ParameterOptimizationMode
-from . import parsers
+from .estimation import OptimalModelsFinder, ParametersProcessing
+from . import estimators, optimization_modes, parsers, exporter
+from .constants import GROUND_TRUTH_TAGS
 from .utils import fetch_instance
 from configparser import ConfigParser
-
 
 
 class Initializer:
@@ -37,9 +36,9 @@ class EstimationInitializer:
 
 
     def initialize_parameter_estimators(self):
-        estimators = self.config.get('estimation', 'estimators').strip().split(', ')
+        estimator_names = self.config.get('estimation', 'estimators').strip().split(', ')
         # TODO: add error handling
-        estimator_objects = [fetch_instance(ParametersEstimator, x, None) for x in estimators]
+        estimator_objects = [getattr(estimators, x) for x in estimator_names]
         return estimator_objects
 
 
@@ -52,11 +51,35 @@ class EstimationInitializer:
 
 
     def initialize_optimization_modes(self):
-        optimization_modes = self.config.get('estimation', 'optimization_modes').strip().split(', ')
+        opt_mode_names = self.config.get('estimation', 'optimization_modes').strip().split(', ')
         # TODO: add error handling
-        optimization_objects = [fetch_instance(ParameterOptimizationMode, x, None) for x in optimization_modes]
+        optimization_objects = [getattr(optimization_modes, f"{x}Mode") for x in opt_mode_names]
         return optimization_objects
     
+
+
+class ValidationInitializer:
+
+    def __init__(self, config: ConfigParser, df_processor) -> None:
+        self.config = config
+        self.engine = config.get('general', 'engine', fallback='Tide')
+        self.filter_score = config.get('general', 'filter_score', fallback='tev')
+        self.df_processor = df_processor
+
+
+
+class ExporterInitializer:
+
+    def __init__(self, config) -> None:
+        self.exporter_name = f"{config.get('estimation', 'exporter', fallback='PeptideProphet').strip()}Exporter"
+        self.out_name = config.get('general', 'outname', fallback='test').strip()
+
+    def initialize(self):
+        try:
+            return fetch_instance(exporter, self.exporter_name, self.out_name)
+        except AttributeError as exc:
+            raise ValueError("Unsupported or invalid exporter.") from exc
+
 
 class ModelInitializer(ABC):
 
@@ -113,21 +136,17 @@ class LowerOrderModelInitializer(ModelInitializer):
 class BootstrapInitializer(Initializer):
 
     @staticmethod
-    def initialize(df: pd.DataFrame, n_rep):
+    def initialize(df: pd.DataFrame, n_rep, fdr_threshold_array):
 
-        fdr_nums = 100
-
-        th_array = np.linspace(0.001, 0.1, fdr_nums)
-        label_dict = {'positive': 0, 'negative': 1}
         length_df = len(df)
 
         bootstrap_idxs = [np.random.choice(np.arange(length_df), size=length_df, replace=True) for _ in range(n_rep)]
         critical_vals = np.arange(1, length_df + 1) / length_df
-        critical_list = [critical_vals * x for x in th_array]
+        critical_list = [critical_vals * x for x in fdr_threshold_array]
         bootstrapped = [df.iloc[x, :] for x in bootstrap_idxs]
         sorted_dfs = (x.iloc[np.argsort(x.p_value.values)] for x in bootstrapped)
 
-        return sorted_dfs, critical_list, label_dict['positive'], label_dict['negative']
+        return sorted_dfs, critical_list, GROUND_TRUTH_TAGS['positive'], GROUND_TRUTH_TAGS['negative']
     
 
 
